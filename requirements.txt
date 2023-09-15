@@ -1,0 +1,11 @@
+Fabric~=3.2.2
+Flask-SQLAlchemy
+Flask-WTF
+WTForms~=3.0.1
+coverage
+# ecdsa
+# paramiko
+# pycrypto
+
+flask~=2.3.3
+SQLAlchemy~=2.0.20

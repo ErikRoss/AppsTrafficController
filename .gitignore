@@ -1,2 +1,8 @@
-
+*.pyc
+.DS_Store
+env
+venv
 *.mp4
+.idea
+__pycache__
+migrations

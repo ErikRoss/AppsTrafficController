@@ -1,0 +1,25 @@
+{% extends 'pages/placeholder.apps.html' %}
+
+{% block content %}
+  <form method="post" class="form" enctype="multipart/form-data">
+    <label for="title">App Title</label>
+    {{ form.title(class_ = 'form-control', placeholder = form.title.label.text, required = true) }}
+    <label for="url">App URL</label>
+    {{ form.url(class_ = 'form-control', placeholder = form.url.label.text, required = true) }}
+    <label for="image">App Image</label>
+    {{ form.image(class_ = 'form-control, last-input', required = true) }}
+    <label for="operating_system">Operating System</label>
+    {{ form.operating_system(class_ = 'form-control', required = true) }}
+    <label for="alias">Alias</label>
+    {{ form.alias(class_ = 'form-control', placeholder = form.alias.label.text, required = true) }}
+    <label for="unique_tag">Unique Tag</label>
+    {{ form.unique_tag(class_ = 'form-control', placeholder = form.unique_tag.label.text, required = true) }}
+    <label for="description">Description</label>
+    {{ form.description(class_ = 'form-control', placeholder = form.description.label.text, required = true) }}
+    <label for="status">Status</label>
+    {{ form.status(class_ = 'form-control', placeholder = form.status.text, required = true) }}
+    <input type="submit" value="Add App" class="btn btn-primary btn-lg btn-block">
+  </form>
+  <p></p>
+  {{table}}
+{% endblock %}
