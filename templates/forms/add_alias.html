@@ -1,0 +1,19 @@
+{% extends 'pages/placeholder.aliases.html' %}
+
+{% block content %}
+  <form method="post" class="form">
+    <label for="alias_title">Title</label>
+    {{ form.alias_title(class_ = 'form-control', placeholder = form.alias_title.label.text, required = true) }}
+    <label for="alias_tag">Tag</label>
+    {{ form.alias_tag(class_ = 'form-control', placeholder = form.alias_tag.label.text, required = true) }}
+    <label for="alias_category">Type</label>
+    {{ form.alias_category(class_ = 'form-control', placeholder = form.alias_category.label.text, required = true, onchange="switchAddAliasForm();") }}
+    <label for="alias_parameters">Parameters</label>
+    {{ form.alias_parameters(class_ = 'form-control', placeholder = form.alias_parameters.label.text, required = true) }}
+    <label for="alias_apps" id="alias_apps-label" style="display: none;">Apps</label>
+    {{ form.alias_apps(class_ = 'form-control', placeholder = form.alias_apps.label.text, required = true, style="display: none;") }}
+    
+    <input type="submit" value="Add Alias" class="btn btn-primary btn-lg btn-block">
+  </form>
+  <p></p>
+{% endblock %}

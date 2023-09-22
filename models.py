@@ -21,7 +21,7 @@ class User(db.Model, UserMixin):
     email = db.Column(db.String(120), unique=True)
     password = db.Column(db.String(30))
 
-    def __init__(self, username: str = None, password: str = None, email: str = None):
+    def __init__(self, username: str, password: str, email: str):
         self.username = username
         self.password = password
         self.email = email
@@ -38,7 +38,8 @@ class App(db.Model):
     url = db.Column(db.String(500), unique=True)
     image = db.Column(db.String(500), nullable=True)
     operating_system = db.Column(db.String(120))
-    alias = db.Column(db.String(120), nullable=True)
+    alias_id = db.Column(db.Integer, db.ForeignKey('Aliases.id'))
+    alias_name = db.Column(db.String(120), nullable=True)
     unique_tag = db.Column(db.String(120), unique=True)
     description = db.Column(db.Text, nullable=True)
     status = db.Column(db.String(120))
@@ -60,6 +61,18 @@ class App(db.Model):
         self.unique_tag = unique_tag
         self.description = description
         self.status = status
+
+
+class Alias(db.Model):
+    __tablename__ = 'Aliases'
+
+    id = db.Column(db.Integer, primary_key=True)
+    alias = db.Column(db.String(120), unique=True)
+    unique_tag = db.Column(db.String(120), unique=True)
+
+    def __init__(self, alias: str, unique_tag: str):
+        self.alias = alias
+        self.unique_tag = unique_tag
 
 
 # Create tables.

@@ -73,14 +73,16 @@ def home():
 
 
 def save_app_image(image: FileField):
-    print(image)
-    image_name = f'{int(datetime.datetime.now().timestamp())}.{image.data.filename.split(".")[-1]}'
-    print(image_name)
-    image_path = f'{app.config["UPLOAD_FOLDER"]}/{image_name}'
-    print(image_path)
-    image.data.save(image_path)
-    print('Image saved successfully.')
-    return image_name
+    file_name = image.data.filename
+    if file_name is not None:
+        now_time = int(str(datetime.datetime.now().timestamp()).replace(".", ""))
+        file_extension = file_name.split(".")[-1]
+        image_name = f'{now_time}.{file_extension}'
+        image_path = f'{app.config["UPLOAD_FOLDER"]}/{image_name}'
+        
+        image.data.save(image_path)
+        
+        return image_name
 
 
 @app.route('/apps', methods=['GET', 'POST'])
@@ -98,7 +100,7 @@ def apps():
             app_status = form.status.data
             app_parameters = [app_title, app_url, app_image, app_operating_system, app_alias, app_unique_tag,
                               app_description, app_status]
-            print(app_parameters)
+
             if all(app_parameters):
                 app_image = save_app_image(app_image)
                 new_app = App(title=app_title, url=app_url, image=app_image, operating_system=app_operating_system,
@@ -128,19 +130,19 @@ def apps():
                              'url': app_obj.url,
                              'image': img_html,
                              'operating_system': app_obj.operating_system,
-                             'alias': app_obj.alias,
+                             'alias': app_obj.alias_name,
                              'unique_tag': app_obj.unique_tag,
                              'description': app_obj.description,
                              'status': app_obj.status})
         table = AppsTable(app_rows)
-        print(table.__html__())
 
         return render_template('forms/add_app.html', form=form, table=table)
 
 
 @app.route('/aliases')
 def aliases():
-    return render_template('pages/placeholder.aliases.html')
+    form = AddAliasForm()
+    return render_template('forms/add_alias.html', form=form)
 
 
 @app.route('/login', methods=['GET', 'POST'])

@@ -1,0 +1,11 @@
+{
+    "cSpell.words": [
+        "autoflush",
+        "levelname",
+        "sessionmaker",
+        "sqlalchemy",
+        "werkzeug",
+        "wtforms"
+    ],
+    "python.analysis.typeCheckingMode": "basic"
+}
