@@ -3,7 +3,7 @@ function switchAddAliasForm() {
     let aliasAppsLabel = document.getElementById("alias_apps-label");
     let aliasAppsSelector = document.getElementById("alias_apps");
 
-    if (aliasType === "split" || aliasType === "app") {
+    if (aliasType === "split") {
         aliasAppsLabel.style.removeProperty("display");
         aliasAppsSelector.style.removeProperty("display");
     }

@@ -4,9 +4,6 @@ from wtforms import StringField, PasswordField, TextAreaField, SelectField
 from wtforms.validators import DataRequired, EqualTo, Length
 
 
-# Set your classes here.
-
-
 class RegisterForm(FlaskForm):
     username = StringField('Username', 
                            validators=[DataRequired(), Length(min=6, max=25)])
@@ -35,36 +32,43 @@ class AddAppForm(FlaskForm):
                       validators=[DataRequired(), Length(min=1, max=100)])
     image = FileField(validators=[FileRequired()])
     operating_system = SelectField('Operating System', 
-                                   choices=[('Android', 'Android'), 
-                                            ('iOS', 'iOS')])
-    alias = StringField('Alias Tag', 
-                        validators=[DataRequired(), Length(min=1, max=100)])
+                                   choices=[('Android', 'Android'), ('iOS', 'iOS')])
+    tags = StringField('Tags', validators=[Length(min=1, max=255)])
     unique_tag = StringField('Unique Tag', 
                              validators=[DataRequired(), Length(min=1, max=100)])
     description = TextAreaField('Description', 
-                                validators=[DataRequired(), Length(min=1, max=1000)])
+                                validators=[Length(min=1, max=1000)])
     status = SelectField('Status', 
-                         choices=[('active', 'Active'), 
-                                  ('inactive', 'Inactive'), 
-                                  ('suspended', 'Suspended')])
+                         choices=[
+                            ('active', 'Active'), 
+                            ('inactive', 'Inactive'), 
+                            ('suspended', 'Suspended')
+                            ])
 
 
-class AddAliasForm(FlaskForm):
-    alias_title = StringField('Title', 
-                              validators=[DataRequired(), Length(min=1, max=100)])
-    alias_tag = StringField('Tag', 
-                            validators=[DataRequired(), Length(min=1, max=100)])
-    alias_category = SelectField('Category', 
-                           choices=[('client', 'Client'),
-                                    ('split', 'Split'),
-                                    ('app', 'App'),
-                                    ('geo', 'Geo'),
-                                    ('custom', 'Custom')])
-    alias_parameters = StringField('Parameters', 
-                                   validators=[DataRequired(), Length(min=1, max=100)])
-    alias_apps = SelectField('Apps', 
-                       choices=[('App1', 'App1'),
-                                ('App2', 'App2'),
-                                ('App3', 'App3'),
-                                ('App4', 'App4'),
-                                ('App5', 'App5')])
+class AddCampaignForm(FlaskForm):
+    title = StringField('Title', validators=[DataRequired(), Length(min=1, max=255)])
+    description = TextAreaField('Description', validators=[Length(min=1, max=1000)])
+    geo = SelectField('Geo', choices=[
+        ('US', 'United States'),
+        ('UK', 'United Kingdom'),
+        ('CA', 'Canada'),
+        ('ES', 'Spain'),
+        ('IT', 'Italy'),
+        ('FR', 'France'),
+        ('DE', 'Germany'),
+        ('PL', 'Poland'),
+        ('UA', 'Ukraine'),
+        ('CN', 'China'),
+        ('IN', 'India'),
+        ('ID', 'Indonesia'),
+        ('TH', 'Thailand'),
+        ('VN', 'Vietnam'),
+        ('PH', 'Philippines'),
+        ('BR', 'Brazil'),
+        ('MX', 'Mexico'),
+        ('AR', 'Argentina'),
+        ('CO', 'Colombia')
+        ])
+    apps = SelectField('App', choices=[])
+    custom_parameters = TextAreaField('Custom Parameters', validators=[Length(min=1, max=1000)])

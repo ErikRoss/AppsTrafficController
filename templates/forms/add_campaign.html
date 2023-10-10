@@ -1,0 +1,19 @@
+{% extends 'pages/placeholder.campaigns.html' %}
+
+{% block content %}
+  <form method="post" class="form">
+    <label for="title">Title</label>
+    {{ form.title(class = "form-control", placeholder = form.title.text) }}
+    <label for="description">Description</label>
+    {{ form.description(class = "form-control", placeholder = form.description.text) }}
+    <label for="geo">Geo</label>
+    {{ form.geo(class = "form-control") }}
+    <label for="apps">App</label>
+    {{ form.apps(class = "form-control") }}
+    <label for="custom_parameters">Custom Parameters</label>
+    {{ form.custom_parameters(class = "form-control", placeholder = form.custom_parameters.text) }}
+    
+    <input type="submit" value="Add Campaign" class="btn btn-primary btn-lg btn-block">
+  </form>
+  <p></p>
+{% endblock %}

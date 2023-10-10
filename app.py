@@ -8,13 +8,15 @@ from flask import Flask, render_template, request, session, flash, redirect, url
 import logging
 from logging import Formatter, FileHandler
 
-from flask_login import LoginManager, current_user
+from flask_cors import CORS
+from flask_login import LoginManager, current_user, login_user, logout_user
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
+from flask_wtf.file import FileField
 from werkzeug.datastructures import CombinedMultiDict
 from werkzeug.utils import secure_filename
 
-from forms import *
+from forms import AddAppForm, AddCampaignForm, LoginForm, RegisterForm, ForgotForm
 from tables import AppsTable
 import os
 
@@ -25,6 +27,7 @@ import os
 
 app = Flask(__name__)
 app.config.from_object('config')
+CORS(app)
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 login_manager = LoginManager(app)
@@ -36,7 +39,7 @@ def shutdown_session(exception=None):
     db.session.remove()
 
 
-from models import User, App
+from models import Campaign, User, App, Domain
 
 
 @login_manager.user_loader
@@ -48,7 +51,7 @@ def load_user(user_id):
 def login_required(test):
     @wraps(test)
     def wrap(*args, **kwargs):
-        if 'logged_in' in session:
+        if current_user.is_authenticated:
             return test(*args, **kwargs)
         else:
             flash('You need to login first.')
@@ -62,87 +65,24 @@ def login_required(test):
 # ----------------------------------------------------------------------------#
 
 
-@login_required
-@app.route('/')
+@app.route('/', methods=['GET'])
 def home():
+    domain = request.args.get('domain')
+    redirect_domain = Domain.query.filter_by(domain=domain).first()
+    if redirect_domain:
+        campaign_hash_code = request.args.get('campaign')
+        if campaign_hash_code:
+            campaign = Campaign.query.filter_by(hash_code=campaign_hash_code).first()
+            return render_template(
+                'pages/placeholder.home.html', 
+                redirect_domain=redirect_domain, 
+                campaign=campaign)
+        
     if 'logged_in' in session:
         return render_template('pages/placeholder.home.html')
     else:
         flash('You need to login first.')
         return redirect(url_for('login'))
-
-
-def save_app_image(image: FileField):
-    file_name = image.data.filename
-    if file_name is not None:
-        now_time = int(str(datetime.datetime.now().timestamp()).replace(".", ""))
-        file_extension = file_name.split(".")[-1]
-        image_name = f'{now_time}.{file_extension}'
-        image_path = f'{app.config["UPLOAD_FOLDER"]}/{image_name}'
-        
-        image.data.save(image_path)
-        
-        return image_name
-
-
-@app.route('/apps', methods=['GET', 'POST'])
-def apps():
-    if request.method == 'POST':
-        if 'logged_in' in session:
-            form = AddAppForm(CombinedMultiDict((request.files, request.form)))
-            app_title = form.title.data
-            app_url = form.url.data
-            app_image = form.image
-            app_operating_system = form.operating_system.data
-            app_alias = form.alias.data
-            app_unique_tag = form.unique_tag.data
-            app_description = form.description.data
-            app_status = form.status.data
-            app_parameters = [app_title, app_url, app_image, app_operating_system, app_alias, app_unique_tag,
-                              app_description, app_status]
-
-            if all(app_parameters):
-                app_image = save_app_image(app_image)
-                new_app = App(title=app_title, url=app_url, image=app_image, operating_system=app_operating_system,
-                              alias=app_alias, unique_tag=app_unique_tag, description=app_description,
-                              status=app_status)
-                db.session.add(new_app)
-                db.session.commit()
-                flash('App added successfully.')
-                form = AddAppForm()
-                return render_template('forms/add_app.html', form=form)
-            else:
-                flash('Please fill in all the fields.')
-                form = AddAppForm()
-                return render_template('forms/add_app.html', form=form)
-        else:
-            flash('You need to login first.')
-            form = LoginForm()
-            return render_template('forms/login.html', form=form)
-    else:
-        form = AddAppForm()
-        app_query = App.query.all()
-        app_rows = []
-        for app_obj in app_query:
-            img_html = f'<img src="{url_for("static", filename=f"img/uploads/{app_obj.image}")}"></img>'
-            app_rows.append({'id': app_obj.id,
-                             'title': app_obj.title,
-                             'url': app_obj.url,
-                             'image': img_html,
-                             'operating_system': app_obj.operating_system,
-                             'alias': app_obj.alias_name,
-                             'unique_tag': app_obj.unique_tag,
-                             'description': app_obj.description,
-                             'status': app_obj.status})
-        table = AppsTable(app_rows)
-
-        return render_template('forms/add_app.html', form=form, table=table)
-
-
-@app.route('/aliases')
-def aliases():
-    form = AddAliasForm()
-    return render_template('forms/add_alias.html', form=form)
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -155,6 +95,7 @@ def login():
             if user and user.password == password:
                 session['logged_in'] = True
                 session['user_id'] = user.id
+                login_user(user)
                 flash('Authorized successfully.')
                 return redirect(url_for('home'))
             else:
@@ -166,7 +107,7 @@ def login():
             form = LoginForm(request.form)
             return render_template('forms/login.html', form=form)
     else:
-        if 'logged_in' in session:
+        if current_user.is_authenticated:
             flash('Already logged in.')
             return redirect(url_for('home'))
         else:
@@ -174,10 +115,12 @@ def login():
             return render_template('forms/login.html', form=form)
 
 
+@login_required
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
     session.pop('user_id', None)
+    logout_user()
     flash('Logged out successfully.')
     return redirect(url_for('login'))
 
@@ -221,8 +164,199 @@ def forgot():
     return render_template('forms/forgot.html', form=form)
 
 
-# Error handlers.
+def save_app_image(image: FileField):
+    file_name = image.data.filename
+    now_time = int(str(datetime.datetime.now().timestamp()).replace(".", ""))
+    file_extension = str(file_name).split(".")[-1]
+    image_name = f'{now_time}.{file_extension}'
+    image_path = f'{app.config["UPLOAD_FOLDER"]}/{image_name}'
+    
+    image.data.save(image_path)
+    
+    return image_name
 
+
+@login_required
+@app.route('/apps', methods=['GET', 'POST'])
+def apps():
+    if request.method == 'POST':
+        if 'logged_in' in session:
+            form = AddAppForm(CombinedMultiDict((request.files, request.form)))
+            app_title = form.title.data
+            app_url = form.url.data
+            app_image = form.image
+            app_operating_system = form.operating_system.data
+            app_tags = form.tags.data
+            app_unique_tag = form.unique_tag.data
+            app_description = form.description.data
+            app_status = form.status.data
+            app_parameters = [
+                app_title, 
+                app_url, 
+                app_image, 
+                app_operating_system, 
+                app_unique_tag,
+                app_status
+                ]
+
+            if all(app_parameters):
+                app_image = save_app_image(app_image)
+                new_app = App(
+                    title=app_title, 
+                    url=app_url, 
+                    image=app_image, 
+                    operating_system=app_operating_system,
+                    tags=app_tags, 
+                    unique_tag=app_unique_tag, 
+                    description=app_description,
+                    status=app_status
+                    )
+                db.session.add(new_app)
+                db.session.commit()
+                flash('App added successfully.')
+                form = AddAppForm()
+                return render_template('forms/add_app.html', form=form)
+            else:
+                flash('Please fill in all the fields.')
+                form = AddAppForm()
+                return render_template('forms/add_app.html', form=form)
+        else:
+            flash('You need to login first.')
+            form = LoginForm()
+            return render_template('forms/login.html', form=form)
+    else:
+        form = AddAppForm()
+        
+        app_query = App.query.all()
+        app_rows = []
+        for app_obj in app_query:
+            img_html = f'<img src="{url_for("static", filename=f"img/uploads/{app_obj.image}")}"></img>'
+            app_rows.append({
+                'id': app_obj.id,
+                'title': app_obj.title,
+                'url': app_obj.url,
+                'image': img_html,
+                'operating_system': app_obj.operating_system,
+                'tags': app_obj.tags,
+                'unique_tag': app_obj.unique_tag,
+                'description': app_obj.description,
+                'status': app_obj.status
+                })
+        table = AppsTable(app_rows)
+
+        return render_template('forms/add_app.html', form=form, table=table)
+
+
+@login_required
+@app.route('/campaigns', methods=['GET', 'POST'])
+def campaigns():
+    if request.method == 'GET':
+        apps = App.query.all()
+        app_choices = [(app.id, app.title) for app in apps]
+        
+        form = AddCampaignForm()
+        form.apps.choices = app_choices
+        
+        campaigns_query = Campaign.query.all()
+        campaigns_rows = []
+        for campaign_obj in campaigns_query:
+            campaigns_rows.append({'id': campaign_obj.id,
+                                   'title': campaign_obj.title,
+                                   'description': campaign_obj.description,
+                                   'geo': campaign_obj.geo,
+                                   'apps': ', '.join([app.title for app in campaign_obj.apps]),
+                                   'custom_parameters': campaign_obj.custom_parameters,
+                                   'hash_code': campaign_obj.hash_code})
+        table = AppsTable(campaigns_rows)
+        
+        return render_template('forms/add_campaign.html', form=form, campaigns_table=table)
+    else:
+        form = AddCampaignForm(request.form)
+        campaign_title = form.title.data
+        campaign_description = form.description.data
+        campaign_geo = form.geo.data
+        campaign_apps = form.apps.data
+        campaign_custom_parameters = form.custom_parameters.data
+        
+        campaign_parameters = [
+            campaign_title,
+            campaign_geo,
+            campaign_apps,
+            ]
+        
+        if campaign_description is None:
+            campaign_description = ''
+            
+        if campaign_custom_parameters is None:
+            campaign_custom_parameters = ''
+        
+        if all(campaign_parameters):
+            new_campaign = Campaign(
+                title=campaign_title,
+                description=campaign_description,
+                user=current_user.id,
+                geo=campaign_geo,
+                custom_parameters=campaign_custom_parameters,
+                apps=[campaign_apps]
+                )
+            db.session.add(new_campaign)
+            db.session.commit()
+            flash('Campaign added successfully.')
+            return redirect(url_for('campaigns'))
+
+# Test routes
+
+@app.route('/get_test', methods=['GET'])
+def get_test():
+    """ Test route for GET requests, returns a JSON response. """
+    return {
+        'system': ['Linux', 'Windows', 'Mac', 'Android', 'iOS'],
+        'browsers': ['Chrome', 'Firefox', 'Safari', 'Opera', 'Edge', 'IE', 'Other']
+        }
+    
+
+@app.route('/post_test', methods=['POST'])
+def post_test():
+    """ Test route for POST requests, returns a JSON response with the result of the request. """
+    try:
+        print(request.json)
+        print(request.data)
+        print(request.form)
+        test_parameters = request.json
+        name = test_parameters['name']
+        age = test_parameters['age']
+        system = test_parameters['system']
+        browsers = test_parameters['browsers']
+        custom_parameters = test_parameters['custom_parameters']
+    except KeyError:
+        return {'result': 'error'}
+    else:
+        return {
+            'result': 'success',
+            'data': {
+                'name': name,
+                'age': age,
+                'system': system,
+                'browsers': browsers,
+                'custom_parameters': custom_parameters
+                }
+            }
+
+    d = {
+    'name': 'John Doe',
+    'age': 16,
+    'system': 'Linux',
+    'browsers': [
+        'Chrome', 
+        'Firefox'
+        ],
+    'custom_parameters': {
+        'param1': 'value1',
+        'param2': 'value2'
+        }
+    }
+
+# Error handlers.
 
 @app.errorhandler(500)
 def internal_error(error):
@@ -252,7 +386,7 @@ if not app.debug:
 # Default port:
 if __name__ == '__main__':
     db.create_all()
-    app.run()
+    app.run(cors_allowed_origins=["http://localhost:3000", "*"])
 
 # Or specify port manually:
 '''
