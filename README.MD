@@ -86,6 +86,17 @@
 }
 ```
 
+| Параметр | Тип | Описание | Обязательный |
+| -------- | --- | -------- | ------------ |
+| `title` | Строка | Название приложения | Да |
+| `url` | Строка | URL приложения | Да |
+| `image` | Строка | Имя файла изображения | Нет |
+| `operating_system` | Строка | Операционная система, для которой предназначено приложение | Да |
+| `tags` | Список строк | Список тегов, связанных с приложением | Нет |
+| `unique_tag` | Строка | Уникальный тег, связанный с приложением | Да |
+| `description` | Строка | Описание приложения | Нет |
+| `status` | Строка | Статус приложения (`active` или `inactive`) | Да |
+
 **Ответ в случае успеха:**
 
 ```json
@@ -112,7 +123,7 @@
             "geo": "US",
             "apps": ["myapp", "anotherapp"],
             "description": "My Campaign description",
-            "landing_page": "https://mycampaign.com",
+            "landing_page": "landing.html",
             "custom_parameters": {"param1": "value1", "param2": "value2"}
         },
         {
@@ -122,7 +133,7 @@
             "geo": "UK",
             "apps": ["myapp"],
             "description": "Another Campaign description",
-            "landing_page": "https://anothercampaign.com",
+            "landing_page": "landing.php",
             "custom_parameters": {"param3": "value3", "param4": "value4"}
         }
     ]
@@ -146,7 +157,7 @@
         "geo": "US",
         "apps": ["myapp", "anotherapp"],
         "description": "My Campaign description",
-        "landing_page": "https://mycampaign.com",
+        "landing_page": "landing.html",
         "custom_parameters": {"param1": "value1", "param2": "value2"}
     }
 }
@@ -167,10 +178,20 @@
     "geo": "US",
     "apps": ["myapp", "anotherapp"],
     "description": "My New Campaign description",
-    "landing_page": "https://mynewcampaign.com",
+    "landing_page": "landing2.php",
     "custom_parameters": {"param1": "value1", "param2": "value2"}
 }
 ```
+
+| Параметр | Тип | Описание | Обязательный |
+| -------- | --- | -------- | ------------ |
+| `title` | Строка | Название кампании | Да |
+| `user` | Строка | Пользователь, создавший кампанию | Да |
+| `geo` | Строка | География кампании | Да |
+| `apps` | Список строк | Список приложений, связанных с кампанией | Да |
+| `description` | Строка | Описание кампании | Нет |
+| `landing_page` | Строка | Файл лендинга | Нет |
+| `custom_parameters` | Словарь | Словарь пользовательских параметров | Нет |
 
 **Ответ в случае успеха:**
 
