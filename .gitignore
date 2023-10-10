@@ -4,6 +4,6 @@ env
 venv
 *.mp4
 .idea
+.vscode
 __pycache__
 migrations
-.vscode/settings.json
