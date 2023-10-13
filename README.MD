@@ -4,6 +4,35 @@
 
 ## Эндпоинты
 
+### Получение списка всех пользователей
+
+**URL:** `/users`
+
+**Метод:** `GET`
+
+**Ответ:**
+
+```json
+{
+    "users": [
+        {
+            "domains": [],
+            "email": "test@test.com",
+            "id": 1,
+            "password": "testuser",
+            "username": "testuser"
+        },
+        {
+            "domains": [],
+            "email": "test2@test.com",
+            "id": 2,
+            "password": "testuser2",
+            "username": "testuser2"
+        }
+    ]
+}
+```
+
 ### Получение списка всех приложений
 
 **URL:** `/apps`
@@ -67,7 +96,7 @@
 
 ### Добавление нового приложения
 
-**URL:** `/add_app`
+**URL:** `/apps/add`
 
 **Метод:** `POST`
 
@@ -102,6 +131,48 @@
 ```json
 {
     "message": "App added successfully."
+}
+```
+
+### Изменение статуса приложения
+
+**URL:** `/apps/update_status`
+
+**Метод:** `PATCH`
+
+**Тело запроса:**
+
+```json
+{
+    "app_id": 1,
+    "status": "inactive"
+}
+```
+
+| Параметр | Тип | Описание | Обязательный |
+| -------- | --- | -------- | ------------ |
+| `app_id` | Целое число | ID приложения | Да |
+| `status` | Строка | Статус приложения (`active` или `inactive`) | Да |
+
+**Ответ в случае успеха:**
+
+```json
+{
+    "message": "App status updated successfully."
+}
+```
+
+### Удаление приложения
+
+**URL:** `/apps/delete/<int:app_id>`
+
+**Метод:** `DELETE`
+
+**Ответ в случае успеха:**
+
+```json
+{
+    "message": "App deleted successfully."
 }
 ```
 
@@ -165,7 +236,7 @@
 
 ### Добавление новой кампании
 
-**URL:** `/add_campaign`
+**URL:** `/campaigns/add`
 
 **Метод:** `POST`
 
@@ -174,7 +245,7 @@
 ```json
 {
     "title": "My New Campaign",
-    "user": "John",
+    "user": 1,
     "geo": "US",
     "apps": ["myapp", "anotherapp"],
     "description": "My New Campaign description",
@@ -198,6 +269,77 @@
 ```json
 {
     "message": "Campaign added successfully."
+}
+```
+
+### Изменение статуса кампании
+
+**URL:** `/campaigns/update_status`
+
+**Метод:** `PATCH`
+
+**Тело запроса:**
+
+```json
+{
+    "campaign_id": 1,
+    "status": "inactive"
+}
+```
+
+| Параметр | Тип | Описание | Обязательный |
+| -------- | --- | -------- | ------------ |
+| `campaign_id` | Целое число | ID кампании | Да |
+| `status` | Строка | Статус кампании (`active` или `inactive`) | Да |
+
+**Ответ в случае успеха:**
+
+```json
+{
+    "message": "Campaign status updated successfully."
+}
+```
+
+### Удаление кампании
+
+**URL:** `/campaigns/delete/<int:campaign_id>`
+
+**Метод:** `DELETE`
+
+**Ответ в случае успеха:**
+
+```json
+{
+    "message": "Campaign deleted successfully."
+}
+```
+
+### Получение списка всех доменов
+
+**URL:** `/domains`
+
+**Метод:** `GET`
+
+**Ответ:**
+
+```json
+{
+    "domains": [
+        {
+            "id": 1,
+            "domain": "mydomain.com",
+            "status": "active",
+            "creating_date": "2023-01-01 00:00:00",
+            "users": [1]
+        },
+        {
+            "id": 2,
+            "domain": "anotherdomain.com",
+            "status": "inactive",
+            "creating_date": "2023-01-02 00:00:00",
+            "users": [1, 2]
+        }
+    ]
 }
 ```
 
