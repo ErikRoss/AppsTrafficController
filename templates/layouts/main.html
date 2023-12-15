@@ -57,9 +57,6 @@
             <li {% if request.endpoint == 'apps' %} class="active" {% endif %}><a href="{{ url_for('apps') }}">Apps</a></li>
             <li {% if request.endpoint == 'campaigns' %} class="active" {% endif %}><a href="{{ url_for('campaigns') }}">Campaigns</a></li>
           </ul>
-          <ul class="nav navbar-nav pull-right">
-            <li><a href="{{ url_for('logout') }}">Logout</a></li>
-          </ul>
         </div><!--/.nav-collapse -->
       </div>
     </div>

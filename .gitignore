@@ -7,3 +7,9 @@ venv
 .vscode
 __pycache__
 migrations
+landings
+logs
+static
+backup
+*.zip
+*.log

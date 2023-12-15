@@ -1,213 +1,949 @@
-
+from datetime import datetime
 import hashlib
 import json
+from typing import Optional
 
 from flask_login import UserMixin
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
+from werkzeug.security import generate_password_hash
 
-from app import db, app
+from config import SQLALCHEMY_DATABASE_URI as db_uri
+from database import db
 
-engine = create_engine(app.config['SQLALCHEMY_DATABASE_URI'], echo=True)
-db_session = scoped_session(sessionmaker(autocommit=False,
-                                         autoflush=False,
-                                         bind=engine))
+
+engine = create_engine(db_uri, echo=True)
+db_session = scoped_session(
+    sessionmaker(autocommit=False, autoflush=False, bind=engine)
+)
 Base = declarative_base()
 Base.query = db_session.query_property()
 
 
 class User(db.Model, UserMixin):
-    __tablename__ = 'Users'
+    __tablename__ = "Users"
 
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(120), unique=True)
-    email = db.Column(db.String(120), unique=True)
-    password = db.Column(db.String(30))
-    domains = relationship('Domain', secondary='domains_users', back_populates='users')
+    username = db.Column(db.String(50), unique=True)
+    balance = db.Column(db.Float, default=0.00)
+    email = db.Column(db.String(256), unique=True)
+    telegram = db.Column(db.String(35))
+    domains = relationship("Domain", backref="user")
+    password_hash = db.Column(db.String(128))
+    status = db.Column(db.String(20), default="active")
+    role = db.Column(db.String(20), default="user")
+    allowed_apps = relationship(
+        "App", secondary="users_allowed_apps", back_populates="allowed_users"
+    )
 
-    def __init__(self, username: str, password: str, email: str):
+    def __init__(
+        self,
+        username: str,
+        password: str,
+        email: str,
+        telegram: Optional[str] = None,
+        role: str = "user",
+    ):
         self.username = username
-        self.password = password
+        self.balance = 0.00
+        self.password_hash = password
         self.email = email
+        self.telegram = telegram
+        self.role = role
 
     def __repr__(self):
-        return f'<User {self.username} ({self.email})>'
+        return f"<User {self.username} ({self.email})>"
+
+    def to_dict(self):
+        if self.balance is None:
+            self.balance = 0.00
+            db.session.commit()
+
+        return {
+            "id": self.id,
+            "status": self.status,
+            "role": self.role,
+            "username": self.username,
+            "balance": self.balance,
+            "email": self.email,
+            "telegram": self.telegram,
+            "domains": [domain.to_limited_dict() for domain in self.domains]
+            if self.domains
+            else [],
+            "allowed_apps": [app.to_very_limited_dict() for app in self.allowed_apps],
+        }
+
+    def to_limited_dict(self):
+        return {"id": self.id, "username": self.username}
+
+    def update_status(self, status: str):
+        self.status = status
+        db.session.commit()
+
+    def add_balance(self, amount: float):
+        if self.balance is None:
+            self.balance = 0.00
+        self.balance += amount
+        db.session.commit()
+
+    def subtract_balance(self, amount: float):
+        if self.balance is None:
+            self.balance = 0.00
+        self.balance -= amount
+        db.session.commit()
+
+    def update_password(self, password: str):
+        self.password_hash = generate_password_hash(password)
+        db.session.commit()
+
+    def update_role(self, role: str):
+        self.role = role
+        db.session.commit()
+
+
+class SubUser(db.Model):
+    __tablename__ = "SubUsers"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50))
+    color = db.Column(db.String(20))
+    description = db.Column(db.String(255))
+    owner_id = db.Column(db.Integer, db.ForeignKey("Users.id"))
+    owner = relationship("User", backref="subusers")
+
+    def __init__(
+        self,
+        name: str,
+        color: str,
+        description: str,
+        owner_id: int,
+    ):
+        self.name = name
+        self.color = color
+        self.description = description
+        self.owner_id = owner_id
+
+    def __repr__(self):
+        return f"<SubUser {self.name} ({self.owner.username})>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "color": self.color,
+            "description": self.description,
+        }
+
+
+class Transaction(db.Model):
+    __tablename__ = "Transactions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("Users.id"))
+    user = relationship("User", backref="transactions")
+    transaction_type = db.Column(db.String(20))
+    amount = db.Column(db.Float)
+    reason = db.Column(db.String(100))
+    geo = db.Column(db.String(50), nullable=True)
+    timestamp = db.Column(db.DateTime)
+
+    def __init__(
+        self,
+        user_id: int,
+        transaction_type: str,
+        amount: float,
+        reason: str,
+        geo: Optional[str] = None,
+    ):
+        self.user_id = user_id
+        self.transaction_type = transaction_type
+        self.amount = amount
+        self.reason = reason
+        self.geo = geo
+        self.timestamp = datetime.now()
+
+    def __repr__(self):
+        return (
+            f"{self.user.username}|{self.transaction_type}|{self.amount}|{self.reason}"
+        )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "transaction_type": self.transaction_type,
+            "amount": self.amount,
+            "reason": self.reason,
+            "geo": self.geo,
+            "timestamp": self.timestamp,
+        }
 
 
 class App(db.Model):
-    __tablename__ = 'Apps'
+    __tablename__ = "Apps"
 
     id = db.Column(db.Integer, primary_key=True)
+    keitaro_id = db.Column(db.Integer, nullable=True)
     title = db.Column(db.String(120), unique=True)
-    url = db.Column(db.String(500), unique=True)
-    image = db.Column(db.String(500), nullable=True)
-    operating_system = db.Column(db.String(120))
-    tags = db.Column(db.String(255))
-    unique_tag = db.Column(db.String(120), unique=True)
     description = db.Column(db.Text, nullable=True)
-    status = db.Column(db.String(120))
-    
-    campaigns = relationship('Campaign', secondary='campaigns_apps', back_populates='apps')
+    url = db.Column(db.String(300), nullable=True)
+    image = db.Column(db.String(280), nullable=True)
+    operating_system = db.Column(db.String(20))
+    tags = relationship("AppTag", secondary="apps_tags", back_populates="apps")
+    status = db.Column(db.String(20))
+    views = db.Column(db.Integer, default=0)
+    installs = db.Column(db.Integer, default=0)
+    registrations = db.Column(db.Integer, default=0)
+    deposits = db.Column(db.Integer, default=0)
+
+    campaigns = relationship(
+        "Campaign", secondary="campaigns_apps", back_populates="apps"
+    )
+    allowed_users = relationship(
+        "User", secondary="users_allowed_apps", back_populates="allowed_apps"
+    )
 
     def __init__(
         self,
         title: str,
-        url: str,
-        image: str,
-        operating_system: str,
-        tags: str,
-        unique_tag: str,
         description: str,
-        status: str
-        ):
+        url: str,
+        operating_system: str,
+        tags: list,
+        status: str,
+        image: Optional[str] = None,
+        keitaro_id: Optional[int] = None,
+    ):
         self.title = title
         self.url = url
         self.image = image
         self.operating_system = operating_system
         self.tags = tags
-        self.unique_tag = unique_tag
         self.description = description
         self.status = status
-        
+        self.keitaro_id = keitaro_id
+
     def __repr__(self):
-        return f'<App {self.title} ({self.url})>'
-    
+        return f"'{self.title}' (id: {self.id})"
+
     def to_dict(self):
         return {
-            'title': self.title,
-            'url': self.url,
-            'image': self.image,
-            'operating_system': self.operating_system,
-            'tags': self.tags,
-            'unique_tag': self.unique_tag,
-            'description': self.description,
-            'status': self.status
-            }
+            "id": self.id,
+            "keitaro_id": self.keitaro_id,
+            "title": self.title,
+            "url": self.url,
+            "image": self.image,
+            "operating_system": self.operating_system,
+            "tags": [tag.tag for tag in self.tags],
+            "description": self.description,
+            "status": self.status,
+            "views": self.views,
+            "installs": self.installs,
+            "allowed_users": [user.to_limited_dict() for user in self.allowed_users],
+        }
+
+    def to_limited_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "image": self.image,
+            "operating_system": self.operating_system,
+            "tags": [tag.tag for tag in self.tags],
+        }
+
+    def to_very_limited_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+        }
+
+    def update_status(self, status: str):
+        self.status = status
+        db.session.commit()
+
+    def allow_for_users(self, users: list):
+        for user in users:
+            user_obj = User.query.get(user)
+            if user_obj and user_obj not in self.allowed_users:
+                self.allowed_users.append(user_obj)
+        db.session.commit()
+
+    def disallow_for_users(self, users: list):
+        for user in users:
+            user_obj = User.query.get(user)
+            if user_obj and user_obj in self.allowed_users:
+                self.allowed_users.remove(user_obj)
+        db.session.commit()
+
+    def count_views(self):
+        if self.views:
+            self.views += 1
+        else:
+            self.views = 1
+        db.session.commit()
+
+    def count_installs(self):
+        if self.installs:
+            self.installs += 1
+        else:
+            self.installs = 1
+        db.session.commit()
+
+    def count_registrations(self):
+        if self.registrations:
+            self.registrations += 1
+        else:
+            self.registrations = 1
+        db.session.commit()
+
+    def count_deposits(self):
+        if self.deposits:
+            self.deposits += 1
+        else:
+            self.deposits = 1
+        db.session.commit()
+
+
+class AppTag(db.Model):
+    __tablename__ = "AppsTags"
+
+    id = db.Column(db.Integer, primary_key=True)
+    tag = db.Column(db.String(25), unique=True)
+    apps = relationship("App", secondary="apps_tags", back_populates="tags")
+
+    def __init__(self, tag: str):
+        self.tag = tag
+
+    def __repr__(self):
+        return f"<AppTag {self.tag}>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tag": self.tag,
+            "apps": [app.id for app in self.apps] if self.apps else [],
+        }
+
+    def add_app(self, app: App):
+        self.apps.append(app)
+        db.session.commit()
 
 
 class Campaign(db.Model):
-    __tablename__ = 'Campaigns'
-    
+    __tablename__ = "Campaigns"
+
     id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(255))
+    title = db.Column(db.String(120))
     description = db.Column(db.Text)
-    user = db.Column(db.Integer, db.ForeignKey('Users.id'))
-    geo = db.Column(db.String(255))
-    landing_page = db.Column(db.String(255), nullable=True)
-    custom_parameters = db.Column(db.Text, nullable=True)
-    
-    apps = relationship('App', secondary='campaigns_apps', back_populates='campaigns')
-    
-    hash_code = db.Column(db.String(64))
-    
+    offer_url = db.Column(db.String(255), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("Users.id"), nullable=True)
+    user = db.Column(db.String(255))
+    subuser_id = db.Column(db.Integer, db.ForeignKey("SubUsers.id"), nullable=True)
+    geo = db.Column(db.String(5))
+    landing_title = db.Column(db.String(255), nullable=True)
+    landing_id = db.Column(db.Integer, db.ForeignKey("Landings.id"), nullable=True)
+    custom_parameters = db.Column(db.JSON, nullable=True)
+    status = db.Column(db.String(255), nullable=True, default="inactive")
+    archive = db.Column(db.Boolean, default=False)
+
+    apps = relationship("App", secondary="campaigns_apps", back_populates="campaigns")
+    apps_stats = db.Column(db.JSON, nullable=True)
+    operating_system = db.Column(db.String(20))
+    app_tags = db.Column(db.ARRAY(db.String(25)), nullable=True)
+
+    hash_code = db.Column(db.String(64), unique=True)
+
     def __init__(
         self,
         title: str,
-        user: int,
+        offer_url: str,
         geo: str,
         apps: list,
-        description: str = '',
-        landing_page: str = '',
-        custom_parameters: str = ''
-        ):
+        apps_stats: list,
+        app_tags: list,
+        operating_system: str,
+        user: str,
+        user_id: Optional[int] = None,
+        subuser_id: Optional[int] = None,
+        description: str = "",
+        landing_id: Optional[int] = None,
+        landing_title: str = "",
+        custom_parameters: dict = {},
+        status: str = "inactive",
+    ):
         self.title = title
-        self.user = user
+        self.offer_url = offer_url
         self.geo = geo
-        self.landing_page = landing_page
+        self.landing_id = landing_id
+        self.landing_title = landing_title
         self.description = description
         self.custom_parameters = custom_parameters
-        
-        for app in apps:
-            self.apps.append(App.query.get(int(app)))
-        
-        self.hash_code = self.calculate_hash_sum()
-    
-    def calculate_hash_sum(self):
-        hash_string = json.dumps({
-            'title': self.title,
-            'user': self.user,
-            'geo': self.geo,
-            'apps': [app.id for app in self.apps],
-            'description': self.description,
-            'custom_parameters': self.custom_parameters
-            })
-        self.hash_code = hashlib.sha256(hash_string.encode('utf-8')).hexdigest()
-        
-        return self.hash_code
-        
-    def __repr__(self):
-        return f'<Campaign {self.id}>'
-    
-    def to_dict(self):
-        return {
-            'title': self.title,
-            'description': self.description,
-            'user': self.user,
-            'geo': self.geo,
-            'apps': [app.id for app in self.apps],
-            'landing_page': self.landing_page,
-            'custom_parameters': self.custom_parameters,
-            'hash_code': self.hash_code
-            }
-    
-    
-class Domain(db.Model):
-    __tablename__ = 'Domains'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    domain = db.Column(db.String(255))
-    status = db.Column(db.String(255))
-    creating_date = db.Column(db.DateTime, nullable=True)
-    users = relationship('User', secondary='domains_users', back_populates='domains')
-    
-    def __init__(self, domain: str, campaign: int, status: str, dns: str):
-        self.domain = domain
+        self.user_id = user_id
+        self.user = user
+        self.subuser_id = subuser_id
         self.status = status
-        self.creating_date = None
-        
+
+        for app_ in apps:
+            self.apps.append(App.query.get(app_))
+        self.apps_stats = apps_stats
+        self.operating_system = operating_system
+        self.app_tags = app_tags
+
+        self.hash_code = self.calculate_hash_sum()
+
+    def calculate_hash_sum(self):
+        hash_string = json.dumps(
+            {
+                "title": self.title,
+                "description": self.description,
+                "geo": self.geo,
+                "offer_url": self.offer_url,
+                "landing_id": self.landing_id,
+                "landing_title": self.landing_title,
+                "user_id": self.user_id,
+                "apps": [app.id for app in self.apps],
+                "custom_parameters": self.custom_parameters,
+            }
+        )
+        self.hash_code = hashlib.sha256(hash_string.encode("utf-8")).hexdigest()
+
+        return self.hash_code
+
     def __repr__(self):
-        return f'<Domain {self.id}>'
-    
+        return f"<Campaign {self.id}>"
+
+    def to_dict(self):
+        apps_stats = []
+        for app_ in self.apps_stats or []:
+            try:
+                app_.pop("keitaro_id")
+            except KeyError:
+                pass
+            apps_stats.append(app_)
+
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "offer_url": self.offer_url,
+            "user_id": self.user_id,
+            "user_name": self.user,
+            "subuser": SubUser.query.get(self.subuser_id).to_dict()
+            if self.subuser_id
+            else None,
+            "geo": self.geo,
+            "apps": [app.id for app in self.apps],
+            "apps_stats": apps_stats if self.apps_stats else [],
+            "tags": self.app_tags or [],
+            "landing_id": self.landing_id,
+            "landing_page": self.landing_title,
+            "custom_parameters": self.custom_parameters,
+            "hash_code": self.hash_code,
+            "status": self.status,
+            "archived": self.archive,
+        }
+
+    def update_status(self, status: str):
+        self.status = status
+        db.session.commit()
+
+    def update_info(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        db.session.commit()
+
+    def update_subuser(self, subuser_id: int):
+        self.subuser_id = subuser_id
+        db.session.commit()
+
+    def set_archived(self, archived: bool):
+        self.archive = archived
+        db.session.commit()
+
+
+class Domain(db.Model):
+    __tablename__ = "Domains"
+
+    id = db.Column(db.Integer, primary_key=True)
+    domain = db.Column(db.String(80))
+    created = db.Column(db.DateTime, nullable=True)
+    expires = db.Column(db.DateTime, nullable=True)
+    redirected = db.Column(db.Boolean, nullable=True)
+    proxied = db.Column(db.Boolean, nullable=True)
+    https_rewriting = db.Column(db.Boolean, nullable=True, default=False)
+    https_redirect = db.Column(db.Boolean, nullable=True, default=False)
+    status = db.Column(db.String(20))
+    user_id = db.Column(db.Integer, db.ForeignKey("Users.id"), nullable=True)
+    subuser_id = db.Column(db.Integer, db.ForeignKey("SubUsers.id"), nullable=True)
+    subdomains = relationship("Subdomain", backref="domain", lazy=True)
+    zone_id = db.Column(db.String(255), nullable=True)
+    nameservers = db.Column(db.ARRAY(db.String(255)), nullable=True)
+
+    def __init__(
+        self,
+        domain: str,
+        created: datetime,
+        expires: datetime,
+        redirected: bool,
+        proxied: bool,
+        https_rewriting: bool,
+        https_redirect: bool,
+        status: str,
+        user_id: Optional[int] = None,
+    ):
+        self.domain = domain
+        self.created = created
+        self.expires = expires
+        self.redirected = redirected
+        self.proxied = proxied
+        self.https_rewriting = https_rewriting
+        self.https_redirect = https_redirect
+        self.status = status
+        self.user_id = user_id
+
+    def __repr__(self):
+        return f"'{self.domain}'"
+
     def to_dict(self):
         return {
-            'domain': self.domain,
-            'status': self.status,
-            'creating_date': self.creating_date,
-            'users': [user.id for user in self.users]
-            }
+            "id": self.id,
+            "domain": self.domain,
+            "created": self.created,
+            "expires": self.expires,
+            "redirected": self.redirected,
+            "proxied": self.proxied,
+            "https_rewriting": self.https_rewriting,
+            "https_redirect": self.https_redirect,
+            "status": self.status,
+            "user_id": self.user_id,
+            "subuser": SubUser.query.get(self.subuser_id).to_dict()
+            if self.subuser_id
+            else None,
+            "subdomains": [subdomain.to_dict() for subdomain in self.subdomains]
+            if self.subdomains
+            else [],
+        }
+
+    def to_limited_dict(self):
+        return {"id": self.id, "domain": self.domain}
+
+    def update_status(self, status: str):
+        self.status = status
+        db.session.commit()
+
+    def assing_to_user(self, user_id: int):
+        self.user_id = user_id
+        db.session.commit()
+
+    def save(self):
+        db.session.commit()
+
+
+class Subdomain(db.Model):
+    __tablename__ = "Subdomains"
+
+    id = db.Column(db.Integer, primary_key=True)
+    subdomain = db.Column(db.String(150))
+    status = db.Column(db.String(20))
+    expires = db.Column(db.DateTime, nullable=True)
+    domain_id = db.Column(db.Integer, db.ForeignKey("Domains.id"))
+    # domain = relationship('Domain', backref='subdomains', lazy=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("Users.id"), nullable=True)
+    user = relationship("User", backref="subdomains", lazy=True)
+    is_paid = db.Column(db.Boolean, default=False)
+
+    def __init__(
+        self,
+        subdomain: str,
+        status: str,
+        expires: datetime,
+        domain_id: int,
+        user_id: Optional[int] = None,
+        is_paid: bool = False,
+    ):
+        self.subdomain = subdomain
+        self.status = status
+        self.expires = expires
+        self.domain_id = domain_id
+        self.user_id = user_id
+        self.is_paid = is_paid
+        self.user = User.query.get(user_id) if user_id else None
+
+    def __repr__(self):
+        return f"<Subdomain {self.subdomain}>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "subdomain": self.subdomain,
+            "status": self.status,
+            "expires": self.expires,
+            "domain_id": self.domain_id,
+            "user_id": self.user_id,
+        }
+
+    def update_status(self, status: str):
+        self.status = status
+        db.session.commit()
+
+    def set_paid(self, status: bool):
+        self.is_paid = status
+        db.session.commit()
+
+
+class Registrant(db.Model):
+    __tablename__ = "Registrants"
+
+    id = db.Column(db.Integer, primary_key=True)
+    first_name = db.Column(db.String(50))
+    last_name = db.Column(db.String(50))
+    address = db.Column(db.String(100))
+    city = db.Column(db.String(50))
+    state_province = db.Column(db.String(50))
+    postal_code = db.Column(db.String(10))
+    country = db.Column(db.String(10))
+    phone = db.Column(db.String(20))
+    email = db.Column(db.String(50))
+
+    def __init__(
+        self,
+        first_name: str,
+        last_name: str,
+        address: str,
+        city: str,
+        state_province: str,
+        postal_code: str,
+        country: str,
+        phone: str,
+        email: str,
+    ):
+        self.first_name = first_name
+        self.last_name = last_name
+        self.address = address
+        self.city = city
+        self.state_province = state_province
+        self.postal_code = postal_code
+        self.country = country
+        self.phone = phone
+        self.email = email
+
+    def __repr__(self):
+        return f"<Registrant {self.first_name}>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "address": self.address,
+            "city": self.city,
+            "state_province": self.state_province,
+            "postal_code": self.postal_code,
+            "country": self.country,
+            "phone": self.phone,
+            "email": self.email,
+        }
+
+    def update_info(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        db.session.commit()
+
+
+class Landing(db.Model):
+    __tablename__ = "Landings"
+
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(120))
+    description = db.Column(db.Text, nullable=True)
+    geo = db.Column(db.String(5), nullable=True)
+    working_directory = db.Column(db.String(255))
+    zip_file = db.Column(db.String(255))
+    status = db.Column(db.String(20))
+    tags = db.Column(db.ARRAY(db.String(25)), nullable=True)
+
+    def __init__(
+        self,
+        title: str,
+        description: str,
+        geo: str,
+        working_directory: str,
+        zip_file: str,
+        status: str,
+        tags: list,
+    ):
+        self.title = title
+        self.description = description
+        self.geo = geo
+        self.working_directory = working_directory
+        self.zip_file = zip_file
+        self.status = status
+        self.tags = tags
+
+    def __repr__(self):
+        return f"<Landing {self.title} ({self.status})>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "geo": self.geo,
+            "status": self.status,
+            "tags": self.tags,
+        }
+
+    def update_status(self, status: str):
+        self.status = status
+        db.session.commit()
+
+    def update_info(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        db.session.commit()
+
+
+class CampaignLink(db.Model):
+    __tablename__ = "CampaignsLinks"
+
+    id = db.Column(db.Integer, primary_key=True)
+    ready_link = db.Column(db.Text)
+    additional_parameters = db.Column(db.JSON, nullable=True)
+    comment = db.Column(db.String(500), nullable=True)
+    status = db.Column(db.String(20), default="active")
+    domain_id = db.Column(db.Integer, db.ForeignKey("Domains.id"), nullable=True)
+    domain = relationship("Domain", backref="links", lazy=True)
+    subdomain_id = db.Column(db.Integer, db.ForeignKey("Subdomains.id"), nullable=True)
+    subdomain = relationship("Subdomain", backref="links", lazy=True)
+    campaign_id = db.Column(db.Integer, db.ForeignKey("Campaigns.id"))
+    campaign = relationship("Campaign", backref="links")
+    user_id = db.Column(db.Integer, db.ForeignKey("Users.id"))
+    user = relationship("User", backref="links")
+
+    def __init__(
+        self,
+        ready_link: str,
+        additional_parameters: dict,
+        campaign_id: int,
+        campaign: Campaign,
+        domain_id: Optional[int] = None,
+        domain: Optional[Domain] = None,
+        subdomain_id: Optional[int] = None,
+        subdomain: Optional[Subdomain] = None,
+        comment: Optional[str] = None,
+        user_id: Optional[int] = None,
+        user: Optional[User] = None,
+        status: str = "active",
+    ):
+        self.ready_link = ready_link
+        self.additional_parameters = additional_parameters
+        self.domain_id = domain_id
+        self.domain = domain
+        self.subdomain_id = subdomain_id
+        self.subdomain = subdomain
+        self.campaign_id = campaign_id
+        self.campaign = campaign
+        self.user_id = user_id
+        self.user = user
+        self.comment = comment
+        self.status = status
+        self.domain_id = domain_id
+        self.domain = domain
+
+    def __repr__(self):
+        return f"<CampaignLink {self.id}>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "ready_link": self.ready_link,
+            "additional_parameters": self.additional_parameters,
+            "domain_id": self.domain_id,
+            "domain": self.domain.domain if self.domain else None,
+            "subdomain_id": self.subdomain_id,
+            "subdomain": self.subdomain.subdomain if self.subdomain else None,
+            "campaign_id": self.campaign_id,
+            "campaign": self.campaign.title,
+            "user_id": self.user_id,
+            "user": self.user.username if self.user else None,
+            "comment": self.comment,
+        }
+
+    def update_status(self, status: str):
+        self.status = status
+        db.session.commit()
+
+
+class CampaignClick(db.Model):
+    __tablename__ = "CampaignsClicks"
+
+    id = db.Column(db.Integer, primary_key=True)
+    click_id = db.Column(db.String(10))
+    domain = db.Column(db.String(255))
+    fbclid = db.Column(db.String(500))
+    rma = db.Column(db.String(255))
+    ulb = db.Column(db.Integer)
+    request_parameters = db.Column(db.JSON)
+    campaign_hash = db.Column(db.String(64))
+    campaign_id = db.Column(db.Integer, db.ForeignKey("Campaigns.id"), nullable=True)
+    campaign = relationship("Campaign", backref="clicks")
+    app_id = db.Column(db.Integer, db.ForeignKey("Apps.id"), nullable=True)
+    app = relationship("App", backref="clicks")
+    app_installed = db.Column(db.Boolean, default=False)
+    ip = db.Column(db.String(256))
+    user_agent = db.Column(db.String(255))
+    referer = db.Column(db.String(255))
+    timestamp = db.Column(db.DateTime)
+    blocked = db.Column(db.Boolean, default=False)
+    offer_url = db.Column(db.String(255), nullable=True)
+    result = db.Column(db.String(120), nullable=True)
+    conversion_event = db.Column(db.String(120), nullable=True)
+    conversion_timestamp = db.Column(db.DateTime, nullable=True)
+    conversion_sent = db.Column(db.Boolean, default=False)
+
+    def __init__(
+        self,
+        click_id: str,
+        domain: Optional[str],
+        fbclid: str,
+        rma: str,
+        ulb: int,
+        request_parameters: dict,
+        campaign_hash: str,
+        campaign_id: int,
+        campaign: Campaign,
+        offer_url: str,
+        ip: str,
+        user_agent: str,
+        referer: str,
+        timestamp: datetime,
+        blocked: bool,
+    ):
+        self.click_id = click_id
+        self.domain = domain
+        self.fbclid = fbclid
+        self.rma = rma
+        self.ulb = ulb
+        self.request_parameters = request_parameters
+        self.campaign_hash = campaign_hash
+        self.campaign_id = campaign_id
+        self.campaign = campaign
+        self.offer_url = offer_url
+        self.ip = ip
+        self.user_agent = user_agent
+        self.referer = referer
+        self.timestamp = timestamp
+        self.blocked = blocked
+
+    def __repr__(self):
+        return f"<CampaignClick {self.id}>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "click_id": self.click_id,
+            "domain": self.domain,
+            "fbclid": self.fbclid,
+            "rma": self.rma,
+            "ulb": self.ulb,
+            "request_parameters": self.request_parameters,
+            "campaign_hash": self.campaign_hash,
+            "campaign_id": self.campaign_id,
+            "app_id": self.app_id,
+            "app_installed": self.app_installed,
+            "ip": self.ip,
+            "user_agent": self.user_agent,
+            "referer": self.referer,
+            "timestamp": self.timestamp,
+            "blocked": self.blocked,
+            "offer_url": self.offer_url,
+            "result": self.result,
+            "conversion_event": self.conversion_event,
+            "conversion_timestamp": self.conversion_timestamp,
+            "conversion_sent": self.conversion_sent,
+        }
+
+    def update_conversion(self, event: str, conversion_sent: bool = False):
+        self.conversion_event = event
+        self.conversion_sent = conversion_sent
+        self.conversion_timestamp = datetime.now()
+        db.session.commit()
+
+    def install_app(self):
+        self.app_installed = True
+        db.session.commit()
+
+
+class GeoPrice(db.Model):
+    __tablename__ = "GeoPrices"
+
+    id = db.Column(db.Integer, primary_key=True)
+    geo = db.Column(db.String(5))
+    install_price = db.Column(db.Float, default=0.00)
+    conversion_price = db.Column(db.Float, default=0.00)
+
+    def __init__(
+        self,
+        geo: str,
+        install_price: float,
+        conversion_price: float,
+    ):
+        self.geo = geo
+        self.install_price = install_price
+        self.conversion_price = conversion_price
+
+    def __repr__(self):
+        return f"{self.geo}: {self.install_price}/{self.conversion_price}"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "geo": self.geo,
+            "install_price": self.install_price,
+            "conversion_price": self.conversion_price,
+        }
+
+    def update_prices(self, install_price: float, conversion_price: float):
+        self.install_price = install_price
+        self.conversion_price = conversion_price
+        db.session.commit()
+
 
 campaigns_apps = db.Table(
-    'campaigns_apps',
+    "campaigns_apps",
     db.Column(
-        'campaign_id', 
-        db.Integer, 
-        db.ForeignKey('Campaigns.id'), 
-        primary_key=True
-        ),
-    db.Column(
-        'app_id', 
-        db.Integer, 
-        db.ForeignKey('Apps.id'), 
-        primary_key=True
-        )
-    )
+        "campaign_id", db.Integer, db.ForeignKey("Campaigns.id"), primary_key=True
+    ),
+    db.Column("app_id", db.Integer, db.ForeignKey("Apps.id"), primary_key=True),
+)
 
-domains_users = db.Table(
-    'domains_users',
-    db.Column(
-        'domain_id', 
-        db.Integer, 
-        db.ForeignKey('Domains.id'), 
-        primary_key=True
-        ),
-    db.Column(
-        'user_id', 
-        db.Integer, 
-        db.ForeignKey('Users.id'), 
-        primary_key=True
-        )
-    )
+apps_tags = db.Table(
+    "apps_tags",
+    db.Column("app_id", db.Integer, db.ForeignKey("Apps.id"), primary_key=True),
+    db.Column("tag_id", db.Integer, db.ForeignKey("AppsTags.id"), primary_key=True),
+)
+
+users_allowed_apps = db.Table(
+    "users_allowed_apps",
+    db.Column("user_id", db.Integer, db.ForeignKey("Users.id"), primary_key=True),
+    db.Column("app_id", db.Integer, db.ForeignKey("Apps.id"), primary_key=True),
+)
+
+# domains_users = db.Table(
+#     'domains_users',
+#     db.Column(
+#         'domain_id',
+#         db.Integer,
+#         db.ForeignKey('Domains.id'),
+#         primary_key=True
+#         ),
+#     db.Column(
+#         'user_id',
+#         db.Integer,
+#         db.ForeignKey('Users.id'),
+#         primary_key=True
+#         )
+#     )
 
 # Create tables.
 Base.metadata.create_all(bind=engine)
