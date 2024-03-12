@@ -2,6 +2,7 @@ import os
 
 # Grabs the folder where the script runs.
 basedir = os.path.abspath(os.path.dirname(__file__))
+BASEDIR = os.path.abspath(os.path.dirname(__file__))
 
 # Enable debug mode.
 DEBUG = True
@@ -14,13 +15,15 @@ SECRET_KEY = "appmanager2023"
 SQLALCHEMY_DATABASE_URI = (
     "postgresql://appscontroller:controller2023@localhost:5432/appscontroller"
 )
+SQLALCHEMY_TRACK_MODIFICATIONS = False
+SQLALCHEMY_ENGINE_OPTIONS = {'isolation_level': 'READ COMMITTED'} 
 
 # Set folders for uploads
 UPLOAD_FOLDER = "static/img/uploads"
 LANDINGS_FOLDER = "templates/landings"
 
 # Set DNS host IP for domain registration
-DNS_HOST = "38.54.122.209"
+DNS_HOST = "38.54.13.62"
 
 # Set pameters for Namecheap API
 
@@ -33,10 +36,11 @@ DNS_HOST = "38.54.122.209"
 
 # Production account
 
-NAMECHEAP_CLIENT_IP = "38.54.122.209"
+NAMECHEAP_CLIENT_IP = "38.54.13.62"
 NAMECHEAP_API_KEY = "8eaea527895a44d69d1c9747ad555949"
 NAMECHEAP_USERNAME = "nexodium"
 NAMECHEAP_SANDBOX = False
+NAMECHEAP_CONFIRM_EMAIL = "verif@symbioticapps.com"
 
 NAMECHEAP_API_SANDBOX_URL = "https://api.sandbox.namecheap.com/xml.response"
 NAMECHEAP_API_URL = "https://api.namecheap.com/xml.response"
@@ -45,7 +49,7 @@ NAMECHEAP_API_URL = "https://api.namecheap.com/xml.response"
 
 DOMAIN_PRICE = 15
 SUBDOMAIN_PRICE = 3
-CONVERSION_INSTALL_PRICE_ANDROID = 0.1
+CONVERSION_INSTALL_PRICE_ANDROID = 0.06
 CONVERSION_INSTALL_PRICE_IOS = 0.1
 CONVERSION_REGISTRATION_PRICE_ANDROID = 0.0
 CONVERSION_REGISTRATION_PRICE_IOS = 0.0

@@ -315,6 +315,8 @@ Authorization: Bearer <access_token>
             "amount": 100.00,
             "reason": "admin deposit",
             "geo": null,
+            "app_id": null,
+            "os": null,
             "timestamp": "Tue, 17 Oct 2023 00:00:00 GMT"
         },
         {
@@ -323,6 +325,8 @@ Authorization: Bearer <access_token>
             "amount": 15.00,
             "reason": "domain purchase",
             "geo": "US",
+            "app_id": null,
+            "os": null,
             "timestamp": "Tue, 17 Oct 2023 00:00:00 GMT"
         },
         {
@@ -331,9 +335,46 @@ Authorization: Bearer <access_token>
             "amount": 0.10,
             "reason": "conversion install",
             "geo": "US",
+            "app_id": 1,
+            "os": "ios",
             "timestamp": "Tue, 17 Oct 2023 00:00:00 GMT"
         }
     ]
+}
+```
+
+### Получить API ключ пользователя
+
+**URL:** `/users/<int:user_id>/api_key`
+
+**Метод:** `GET`
+
+**Доступ:** `admin`, `user` c `user.id` = `user_id`
+
+**Ответ:**
+
+```json
+{   
+    "success": true,
+    "api_key": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+}
+```
+
+### Сгенерировать/обновить API ключ пользователя
+
+**URL:** `/users/<int:user_id>/update_api_key`
+
+**Метод:** `PATCH`
+
+**Доступ:** `admin`, `user` c `user.id` = `user_id`
+
+**Ответ:**
+
+```json
+{   
+    "api_key": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+    "message": "API key updated successfully.",
+    "success": true,
 }
 ```
 
@@ -538,27 +579,41 @@ Authorization: Bearer <access_token>
                     "username": "test_user"
                 }
             ],
+            "created_at": "Tue, 17 Oct 2023 00:00:00 GMT",
             "id": 1,
             "title": "My App",
             "url": "https://myapp.com",
             "image": "static/img/uploads/1697372400249729.png",
-            "operating_system": "iOS",
+            "operating_system": "ios",
             "tags": ["tag1", "tag2"],
-            "unique_tag": "myapp",
             "description": "My App description",
-            "status": "active"
+            "status": "active",
+            "is_deleted": false,
+            "views": 0,
+            "installs": 0,
+            "registrations": 0,
+            "deposits": 0,
+            "install_price": 0.00,
+            "conversion_price": 0.00,
         },
         {
             "allowed_users": [],
+            "created_at": "Tue, 17 Oct 2023 00:00:00 GMT",
             "id": 2,
             "title": "Another App",
             "url": "https://anotherapp.com",
             "image": "static/img/uploads/1697382997814109.png",
-            "operating_system": "Android",
+            "operating_system": "android",
             "tags": ["tag3", "tag4"],
-            "unique_tag": "anotherapp",
             "description": "Another App description",
-            "status": "inactive"
+            "status": "inactive",
+            "is_deleted": false,
+            "views": 0,
+            "installs": 0,
+            "registrations": 0,
+            "deposits": 0,
+            "install_price": 0.00,
+            "conversion_price": 0.00,
         }
     ]
 }
@@ -573,14 +628,14 @@ Authorization: Bearer <access_token>
             "id": 1,
             "title": "My App",
             "image": "static/img/uploads/1697372400249729.png",
-            "operating_system": "iOS",
+            "operating_system": "ios",
             "tags": ["tag1", "tag2"]
         },
         {
             "id": 2,
             "title": "Another App",
             "image": "static/img/uploads/1697382997814109.png",
-            "operating_system": "Android",
+            "operating_system": "android",
             "tags": ["tag3", "tag4"]
         }
     ]
@@ -610,15 +665,23 @@ Authorization: Bearer <access_token>
                 "username": "test_user"
             }
         ],
+        "created_at": "Tue, 17 Oct 2023 00:00:00 GMT",
         "id": 1,
         "title": "My App",
         "url": "https://myapp.com",
         "image": "static/img/uploads/1697372400249729.png",
-        "operating_system": "iOS",
+        "operating_system": "ios",
         "tags": ["tag1", "tag2"],
         "unique_tag": "myapp",
         "description": "My App description",
-        "status": "active"
+        "status": "active",
+        "is_deleted": false,
+        "views": 0,
+        "installs": 0,
+        "registrations": 0,
+        "deposits": 0,
+        "install_price": 0.00,
+        "conversion_price": 0.00,
     }
 }
 ```
@@ -631,7 +694,7 @@ Authorization: Bearer <access_token>
         "id": 1,
         "title": "My App",
         "image": "static/img/uploads/1697372400249729.png",
-        "operating_system": "iOS",
+        "operating_system": "ios",
         "tags": ["tag1", "tag2"]
     }
 }
@@ -724,7 +787,9 @@ Authorization: Bearer <access_token>
     "operating_system": "ios",
     "tags": ["control", "test"],
     "description": "My New App description",
-    "status": "active"
+    "status": "active",
+    "install_price": 0.00,
+    "conversion_price": 0.00
 }
 ```
 
@@ -738,6 +803,8 @@ Authorization: Bearer <access_token>
 | `tags` | Список строк | Список тегов, связанных с приложением | Нет | 25 символов/tag |
 | `description` | Строка | Описание приложения | Нет | 256 |
 | `status` | Строка | Статус приложения (`active` или `inactive`) | Да | 20 |
+| `install_price` | Число с плавающей запятой | Цена за установку | Нет | |
+| `conversion_price` | Число с плавающей запятой | Цена за конверсию | Нет | |
 
 **Ответ в случае успеха:**
 
@@ -867,11 +934,24 @@ Authorization: Bearer <access_token>
 
 ### Удаление приложения
 
-**URL:** `/apps/delete/<int:app_id>`
+**URL:** `/apps/delete`
 
 **Метод:** `DELETE`
 
 **Доступ:** `admin`
+
+**Тело запроса:**
+
+```json
+{
+    "id": 1
+    "deleted": true
+}
+```
+| Параметр | Тип | Описание | Обязательный | Максимальная длина |
+| -------- | --- | -------- | ------------ | ------------------ |
+|id|Целое число|ID приложения|Да||
+|deleted|Булево|Удалить приложение (`true`, `false`)|Нет||
 
 **Ответ в случае успеха:**
 
@@ -1272,6 +1352,44 @@ Authorization: Bearer <access_token>
 }
 ```
 
+### Получение статистики по кампании
+
+**URL:** `/campaigns/<int:campaign_id>/stats`
+
+**Метод:** `GET`
+
+**Доступ:** `admin`, `user` c `user_id` = `campaign.user_id`
+
+| Параметр | Тип | Описание | Обязательный | Максимальная длина |
+| -------- | --- | -------- | ------------ | ------------------ |
+|search_query|Строка|Поиск по `event` события|Нет||
+
+**Ответ:**
+
+```json
+{
+    "success": true,
+    "logs": [
+        {
+            "id": 1,
+            "clid": "a1b2f4",
+            "campaign_id": 1,
+            "event": "install",
+            "message": "Installed app 1",
+            "timestamp": "Tue, 17 Oct 2023 00:00:00 GMT",
+        }
+    ],
+    "total_count": 1,
+    "stats": {
+        "clicks": 1,
+        "installs": 0,
+        "registrations": 0,
+        "deposits": 0
+    }
+
+}
+```
+
 ### Удаление кампании
 
 **URL:** `/campaigns/delete/<int:campaign_id>`
@@ -1285,6 +1403,27 @@ Authorization: Bearer <access_token>
 ```json
 {
     "message": "Campaign deleted successfully."
+}
+```
+
+### Получение списка всех доменов верхнего уровня
+
+**URL:** `/domains/top`
+
+**Метод:** `GET`
+
+**Доступ:** `admin`
+
+**Ответ:**
+
+```json
+{
+    "success": true,
+    "top_domains": [
+        ".store",
+        ".online",
+        ".shop"
+    ]
 }
 ```
 

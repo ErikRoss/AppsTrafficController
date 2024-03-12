@@ -26,7 +26,7 @@ namecheap_api_params = {
 
 
 logging.basicConfig(
-    filename=f"/home/appscontroller/appstrafficcontroller/logs/domains_handler_{datetime.now().strftime('%Y-%m-%d')}.log",
+    filename=f"/home/appscontroller/appstrafficcontroller/app/logs/domains_handler_{datetime.now().strftime('%Y-%m-%d')}.log",
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
@@ -39,6 +39,7 @@ class DomainsHandler:
     def get_registrant_parameters(self) -> dict:
         registrant = Registrant.query.first()
         if registrant:
+            registrant_email = config.NAMECHEAP_CONFIRM_EMAIL
             registrant_parameters = {
                 "RegistrantFirstName": registrant.first_name,
                 "TechFirstName": registrant.first_name,
@@ -72,10 +73,10 @@ class DomainsHandler:
                 "TechPhone": registrant.phone,
                 "AdminPhone": registrant.phone,
                 "AuxBillingPhone": registrant.phone,
-                "RegistrantEmailAddress": registrant.email,
-                "TechEmailAddress": registrant.email,
-                "AdminEmailAddress": registrant.email,
-                "AuxBillingEmailAddress": registrant.email,
+                "RegistrantEmailAddress": registrant_email or registrant.email,
+                "TechEmailAddress": registrant_email or registrant.email,
+                "AdminEmailAddress": registrant_email or registrant.email,
+                "AuxBillingEmailAddress": registrant_email or registrant.email,
             }
             return registrant_parameters
         else:

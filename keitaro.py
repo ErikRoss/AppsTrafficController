@@ -1,3 +1,8 @@
+import json
+import logging
+import re
+from typing import Optional
+from flask import app
 import requests
 
 
@@ -25,7 +30,7 @@ class KeitaroApi:
         response = requests.get(url, headers=self.headers)
         return response.json()
 
-    def add_stream_to_campaign(self, app_name: str):
+    def add_stream_to_campaign(self, app_name: str, app_id: Optional[int] = None):
         """
         Add app to campaign
         """
@@ -34,14 +39,39 @@ class KeitaroApi:
             "campaign_id": self.campaign_id,
             "schema": "action",
             "type": "regular",
-            "name": app_name,
+            "name": f"{app_id} - {app_name}",
             "action_type": "do_nothing",
+            "filters": [
+                {"name": "uniqueness", "mode": "accept", "payload": "stream"},
+                {"name": "sub_id_1", "mode": "accept", "payload": str(app_id)},
+                {"name": "uniqueness", "mode": "accept", "payload": "stream"},
+            ],
         }
 
         response = requests.post(url, headers=self.headers, json=payload)
         return response.json()["id"]
 
-    def check_is_user_bot(self, request=None):
+    def get_stream(self, stream_id: int):
+        """
+        Get stream
+        """
+        url = f"{self.api_url}/streams/{stream_id}"
+        response = requests.get(url, headers=self.headers)
+        return response.json()
+
+    def set_stream_deleted(self, stream_id: int):
+        """
+        Set stream deleted
+        """
+        stream_data = self.get_stream(stream_id)
+        stream_data["name"] = f"{stream_data['name']} DELETED"
+        stream_data["state"] = "disabled"
+
+        url = f"{self.api_url}/streams/{stream_id}"
+        response = requests.put(url, headers=self.headers, json=stream_data)
+        return response.json()
+
+    def check_is_user_bot(self, request, request_parameters, rma, clid, fbclid, domain, ulb):
         """
         Check user is bot
         """
@@ -64,17 +94,39 @@ class KeitaroApi:
             "user_agent": user_agent,
             "language": language,
             "x_requested_with": x_requested_with,
+            "rma": rma,
+            "clid": clid,
+            "fbclid": fbclid,
+            "domain": f"https://{domain}",
+            "ulb": ulb,
         }
+        params.update(request_parameters)
 
         result = requests.get(url, params=params)
         if result.status_code == 200:
             params["result"] = result.json()["body"]
+
+            geo = None
+            device = None
+            log = result.json()["log"]
+            for row in log:
+                if row.startswith("User info: "):
+                    user_info = row.split("User info: ")[1]
+                    user_info = json.loads(user_info)
+                    geo = user_info["Country"]
+                    device = user_info["OS"]
+                    kclid = user_info["SubID"]
+                    break
+            params["geo"] = geo.lower() if geo else "Unknown"
+            params["device"] = device.lower() if device else "Unknown"
+            params["kclid"] = kclid if kclid else "Unknown"
+
             return params
         else:
             params["result"] = "error"
             return params
 
-    def check_unique_app_user(self, stream_id, request=None):
+    def check_unique_app_user(self, stream_id, request, param=None) -> dict:
         """
         Check unique users
         """
@@ -92,28 +144,59 @@ class KeitaroApi:
         params = {
             "token": self.campaign_token,
             "campaign_id": self.campaign_id,
-            "stream_id": 95,
+            "stream_id": stream_id,
             "log": "1",
             "info": "1",
             "ip": client_ip,
             "user_agent": user_agent,
             "language": language,
             "x_requested_with": x_requested_with,
+            "param": param,
         }
 
         result = requests.get(url, params=params)
-        if result.status_code == 200:
-            params["result"] = result.json()["info"]["uniqueness"]["stream"]
-            return params
-        else:
+
+        if result.status_code != 200:
             params["result"] = "error"
             return params
+
+        try:
+            logs = result.json()["log"]
+            if param:
+                logging.info(f"Keitaro logs with param {param}:")
+            else:
+                logging.info("Keitaro logs:")
+            logging.info(logs)
+            for index, row in enumerate(logs):
+                if row.endswith(f"#{stream_id}"):
+                    filtered = logs[index + 1]
+                    if "sub_id_1" in filtered:
+                        params["result"] = True
+                        return params
+                    elif "uniqueness" in filtered:
+                        params["result"] = False
+                        return params
+                    else:
+                        params["result"] = False
+                        return params
+            else:
+                params["result"] = False
+                return params
+        except Exception as e:
+            logging.error(e)
+            return {"result": False}
+
+    def set_user_ununique(self, stream_id, request=None, param=None):
+        self.check_unique_app_user(stream_id, request, param)
 
 
 if __name__ == "__main__":
     api = KeitaroApi()
     # print(api.check_unique_user(16))
-    print(api.add_stream_to_campaign("test_app2"))
-    print(api.check_is_user_bot())
-    print(api.check_unique_app_user(95))
+    # print(api.add_stream_to_campaign("test_app2"))
+    # print(api.check_is_user_bot())
+    # print(api.check_unique_app_user(128))
+    # print(api.set_user_ununique(128))
+    api.set_stream_deleted(167)
+
     # api.get_campaigns()

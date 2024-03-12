@@ -5,15 +5,17 @@ import logging
 import requests
 from sqlalchemy import not_
 
+from app import app
 from models import App
 
 
 logging.basicConfig(
-    filename=f"/home/appscontroller/appstrafficcontroller/logs/apps_ban_checker_{datetime.now().strftime('%Y-%m-%d')}.log",
+    filename=f"/home/appscontroller/app/logs/apps_ban_checker_{datetime.now().strftime('%Y-%m-%d')}.log",
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
+app.app_context().push()
 
 class AppsChecker:
     def __init__(self):
@@ -28,8 +30,8 @@ class AppsChecker:
         apps = App.query.filter(not_(App.status == "banned")).all()
         logging.info(f"Apps to check found: {len(apps)}")
         logging.info("=========================")
-        for app in apps:
-            logging.info(app)
+        for app_ in apps:
+            logging.info(app_)
         logging.info("=========================")
 
         return apps
@@ -38,32 +40,34 @@ class AppsChecker:
         """
         Check all apps from database
         """
-        for app in self.apps:
-            self.check_app(app)
+        for app_ in self.apps:
+            self.check_app(app_)
 
-    def check_app(self, app):
+    def check_app(self, app_):
         """
         Check app by url
         """
-        logging.info(f"Checking app {app}")
+        logging.info(f"Checking app {app_}")
         try:
-            response = requests.get(app.url)
+            response = requests.get(app_.url)
 
             is_error_section = b'id="error-section"' in response.content
             if response.status_code != 200 or is_error_section:
-                self.ban_app(app)
-                logging.info(f"App {app} banned")
+                print(response.status_code)
+                print(response.content)
+                self.ban_app(app_)
+                logging.info(f"App {app_} banned")
         except Exception:
-            self.ban_app(app)
-            logging.info(f"App {app} banned")
+            self.ban_app(app_)
+            logging.info(f"App {app_} banned")
         else:
-            logging.info(f"App {app} checked")
+            logging.info(f"App {app_} checked")
 
-    def ban_app(self, app):
+    def ban_app(self, app_):
         """
         Ban app
         """
-        app.update_status("banned")
+        app_.update_status("banned")
 
     def run(self):
         """
@@ -75,5 +79,6 @@ class AppsChecker:
 
 
 if __name__ == "__main__":
-    apps_checker = AppsChecker()
-    apps_checker.run()
+    # apps_checker = AppsChecker()
+    # apps_checker.run()
+    pass

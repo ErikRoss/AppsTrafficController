@@ -1,9 +1,11 @@
 from datetime import datetime
 import hashlib
 import json
+import secrets
 from typing import Optional
 
 from flask_login import UserMixin
+import pytz
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
@@ -20,6 +22,8 @@ db_session = scoped_session(
 Base = declarative_base()
 Base.query = db_session.query_property()
 
+timezone = pytz.timezone('Europe/Kiev')
+
 
 class User(db.Model, UserMixin):
     __tablename__ = "Users"
@@ -33,6 +37,7 @@ class User(db.Model, UserMixin):
     password_hash = db.Column(db.String(128))
     status = db.Column(db.String(20), default="active")
     role = db.Column(db.String(20), default="user")
+    panel_key = db.Column(db.String(20), nullable=True)
     allowed_apps = relationship(
         "App", secondary="users_allowed_apps", back_populates="allowed_users"
     )
@@ -46,18 +51,19 @@ class User(db.Model, UserMixin):
         role: str = "user",
     ):
         self.username = username
-        self.balance = 0.00
         self.password_hash = password
         self.email = email
         self.telegram = telegram
         self.role = role
+        self.balance = round(0.00, 2)
+        self.panel_key = secrets.token_hex(10)
 
     def __repr__(self):
         return f"<User {self.username} ({self.email})>"
 
     def to_dict(self):
         if self.balance is None:
-            self.balance = 0.00
+            self.balance = round(0.00, 2)
             db.session.commit()
 
         return {
@@ -65,7 +71,7 @@ class User(db.Model, UserMixin):
             "status": self.status,
             "role": self.role,
             "username": self.username,
-            "balance": self.balance,
+            "balance": round(self.balance, 2),
             "email": self.email,
             "telegram": self.telegram,
             "domains": [domain.to_limited_dict() for domain in self.domains]
@@ -81,16 +87,18 @@ class User(db.Model, UserMixin):
         self.status = status
         db.session.commit()
 
-    def add_balance(self, amount: float):
+    def add_balance(self, amount: float) -> None:
         if self.balance is None:
             self.balance = 0.00
         self.balance += amount
+        self.balance = round(self.balance, 2)
         db.session.commit()
 
     def subtract_balance(self, amount: float):
         if self.balance is None:
             self.balance = 0.00
         self.balance -= amount
+        self.balance = round(self.balance, 2)
         db.session.commit()
 
     def update_password(self, password: str):
@@ -99,6 +107,21 @@ class User(db.Model, UserMixin):
 
     def update_role(self, role: str):
         self.role = role
+        db.session.commit()
+    
+    def generate_panel_key(self):
+        """
+        Generate 20 symbols key for panel
+        """
+        self.panel_key = secrets.token_hex(10)
+        db.session.commit()
+    
+    def allow_apps(self, apps: list):
+        """
+        Allow apps for user
+        """
+        for app_ in apps:
+            self.allowed_apps.append(app_)
         db.session.commit()
 
 
@@ -146,6 +169,8 @@ class Transaction(db.Model):
     amount = db.Column(db.Float)
     reason = db.Column(db.String(100))
     geo = db.Column(db.String(50), nullable=True)
+    app_id = db.Column(db.Integer, db.ForeignKey("Apps.id"), nullable=True)
+    os = db.Column(db.String(20), nullable=True)
     timestamp = db.Column(db.DateTime)
 
     def __init__(
@@ -155,13 +180,17 @@ class Transaction(db.Model):
         amount: float,
         reason: str,
         geo: Optional[str] = None,
+        app_id: Optional[int] = None,
+        os: Optional[str] = None,
     ):
         self.user_id = user_id
         self.transaction_type = transaction_type
         self.amount = amount
         self.reason = reason
         self.geo = geo
-        self.timestamp = datetime.now()
+        self.timestamp = datetime.now(timezone)
+        self.app_id = app_id
+        self.os = os
 
     def __repr__(self):
         return (
@@ -175,6 +204,8 @@ class Transaction(db.Model):
             "amount": self.amount,
             "reason": self.reason,
             "geo": self.geo,
+            "app_id": self.app_id,
+            "os": self.os,
             "timestamp": self.timestamp,
         }
 
@@ -183,6 +214,7 @@ class App(db.Model):
     __tablename__ = "Apps"
 
     id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime)
     keitaro_id = db.Column(db.Integer, nullable=True)
     title = db.Column(db.String(120), unique=True)
     description = db.Column(db.Text, nullable=True)
@@ -191,10 +223,13 @@ class App(db.Model):
     operating_system = db.Column(db.String(20))
     tags = relationship("AppTag", secondary="apps_tags", back_populates="apps")
     status = db.Column(db.String(20))
+    is_deleted = db.Column(db.Boolean, default=False)
     views = db.Column(db.Integer, default=0)
     installs = db.Column(db.Integer, default=0)
     registrations = db.Column(db.Integer, default=0)
     deposits = db.Column(db.Integer, default=0)
+    install_price = db.Column(db.Float, default=0.00)
+    conversion_price = db.Column(db.Float, default=0.00)
 
     campaigns = relationship(
         "Campaign", secondary="campaigns_apps", back_populates="apps"
@@ -213,7 +248,10 @@ class App(db.Model):
         status: str,
         image: Optional[str] = None,
         keitaro_id: Optional[int] = None,
+        install_price: Optional[float] = 0.00,
+        conversion_price: Optional[float] = 0.00,
     ):
+        self.created_at = datetime.now(timezone)
         self.title = title
         self.url = url
         self.image = image
@@ -222,14 +260,22 @@ class App(db.Model):
         self.description = description
         self.status = status
         self.keitaro_id = keitaro_id
+        self.install_price = install_price
+        self.conversion_price = conversion_price
 
     def __repr__(self):
         return f"'{self.title}' (id: {self.id})"
 
     def to_dict(self):
+        install_price = self.install_price or 0.00
+        conversion_price = self.conversion_price or 0.00
+        created_at = self.created_at or "Unknown"
+        is_deleted = self.is_deleted or False
+        
         return {
             "id": self.id,
-            "keitaro_id": self.keitaro_id,
+            "created_at": created_at,
+            # "keitaro_id": self.keitaro_id,
             "title": self.title,
             "url": self.url,
             "image": self.image,
@@ -237,8 +283,13 @@ class App(db.Model):
             "tags": [tag.tag for tag in self.tags],
             "description": self.description,
             "status": self.status,
+            "is_deleted": is_deleted,
             "views": self.views,
             "installs": self.installs,
+            "registrations": self.registrations,
+            "deposits": self.deposits,
+            "install_price": install_price,
+            "conversion_price": conversion_price,
             "allowed_users": [user.to_limited_dict() for user in self.allowed_users],
         }
 
@@ -259,49 +310,53 @@ class App(db.Model):
 
     def update_status(self, status: str):
         self.status = status
-        db.session.commit()
 
-    def allow_for_users(self, users: list):
+    def allow_for_users(self, users: Optional[list] = None):
+        if not users:
+            users = User.query.all()
+        else:
+            users = User.query.filter(User.id.in_(users)).all()
+        
         for user in users:
-            user_obj = User.query.get(user)
-            if user_obj and user_obj not in self.allowed_users:
-                self.allowed_users.append(user_obj)
-        db.session.commit()
+            if user and user not in self.allowed_users:
+                self.allowed_users.append(user)
 
     def disallow_for_users(self, users: list):
         for user in users:
             user_obj = User.query.get(user)
             if user_obj and user_obj in self.allowed_users:
                 self.allowed_users.remove(user_obj)
-        db.session.commit()
 
     def count_views(self):
         if self.views:
             self.views += 1
         else:
             self.views = 1
-        db.session.commit()
 
     def count_installs(self):
         if self.installs:
             self.installs += 1
         else:
             self.installs = 1
-        db.session.commit()
 
     def count_registrations(self):
         if self.registrations:
             self.registrations += 1
         else:
             self.registrations = 1
-        db.session.commit()
 
     def count_deposits(self):
         if self.deposits:
             self.deposits += 1
         else:
             self.deposits = 1
-        db.session.commit()
+    
+    def set_deleted(self, is_deleted: bool):
+        self.is_deleted = is_deleted
+        if is_deleted:
+            self.status = "deleted"
+        else:
+            self.status = "inactive"
 
 
 class AppTag(db.Model):
@@ -352,6 +407,8 @@ class Campaign(db.Model):
     app_tags = db.Column(db.ARRAY(db.String(25)), nullable=True)
 
     hash_code = db.Column(db.String(64), unique=True)
+    
+    log_messages = relationship("LogMessage", back_populates="campaign")
 
     def __init__(
         self,
@@ -420,6 +477,8 @@ class Campaign(db.Model):
             except KeyError:
                 pass
             apps_stats.append(app_)
+        
+        subuser = SubUser.query.get(self.subuser_id) if self.subuser_id else None
 
         return {
             "id": self.id,
@@ -428,12 +487,11 @@ class Campaign(db.Model):
             "offer_url": self.offer_url,
             "user_id": self.user_id,
             "user_name": self.user,
-            "subuser": SubUser.query.get(self.subuser_id).to_dict()
-            if self.subuser_id
-            else None,
+            "subuser": subuser.to_dict() if subuser else None,
             "geo": self.geo,
             "apps": [app.id for app in self.apps],
             "apps_stats": apps_stats if self.apps_stats else [],
+            "operating_system": self.operating_system,
             "tags": self.app_tags or [],
             "landing_id": self.landing_id,
             "landing_page": self.landing_title,
@@ -459,6 +517,19 @@ class Campaign(db.Model):
     def set_archived(self, archived: bool):
         self.archive = archived
         db.session.commit()
+
+
+class TopDomain(db.Model):
+    __tablename__ = "TopDomains"
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255))
+    
+    def __init__(self, name: str):
+        self.name = name
+        
+    def __repr__(self):
+        return f"<DomainZone {self.name}>"
 
 
 class Domain(db.Model):
@@ -505,6 +576,8 @@ class Domain(db.Model):
         return f"'{self.domain}'"
 
     def to_dict(self):
+        subuser = SubUser.query.get(self.subuser_id) or None
+        
         return {
             "id": self.id,
             "domain": self.domain,
@@ -516,12 +589,10 @@ class Domain(db.Model):
             "https_redirect": self.https_redirect,
             "status": self.status,
             "user_id": self.user_id,
-            "subuser": SubUser.query.get(self.subuser_id).to_dict()
-            if self.subuser_id
-            else None,
-            "subdomains": [subdomain.to_dict() for subdomain in self.subdomains]
-            if self.subdomains
-            else [],
+            "subuser": subuser.to_dict() if subuser else None,
+            # "subdomains": [subdomain.to_dict() for subdomain in self.subdomains]
+            # if self.subdomains
+            # else [],
         }
 
     def to_limited_dict(self):
@@ -778,11 +849,14 @@ class CampaignClick(db.Model):
     __tablename__ = "CampaignsClicks"
 
     id = db.Column(db.Integer, primary_key=True)
+    log_messages = relationship("LogMessage", back_populates="click")
     click_id = db.Column(db.String(10))
     domain = db.Column(db.String(255))
     fbclid = db.Column(db.String(500))
     rma = db.Column(db.String(255))
     ulb = db.Column(db.Integer)
+    pay = db.Column(db.Integer, nullable=True, default=None)
+    kclid = db.Column(db.String(255), nullable=True, default=None)
     request_parameters = db.Column(db.JSON)
     campaign_hash = db.Column(db.String(64))
     campaign_id = db.Column(db.Integer, db.ForeignKey("Campaigns.id"), nullable=True)
@@ -790,8 +864,11 @@ class CampaignClick(db.Model):
     app_id = db.Column(db.Integer, db.ForeignKey("Apps.id"), nullable=True)
     app = relationship("App", backref="clicks")
     app_installed = db.Column(db.Boolean, default=False)
+    app_registered = db.Column(db.Boolean, default=False)
+    app_deposited = db.Column(db.Boolean, default=False)
+    appclid = db.Column(db.String(256), nullable=True, default=None)
     ip = db.Column(db.String(256))
-    user_agent = db.Column(db.String(255))
+    user_agent = db.Column(db.String(750))
     referer = db.Column(db.String(255))
     timestamp = db.Column(db.DateTime)
     blocked = db.Column(db.Boolean, default=False)
@@ -800,6 +877,10 @@ class CampaignClick(db.Model):
     conversion_event = db.Column(db.String(120), nullable=True)
     conversion_timestamp = db.Column(db.DateTime, nullable=True)
     conversion_sent = db.Column(db.Boolean, default=False)
+    geo = db.Column(db.String(5), nullable=True)
+    device = db.Column(db.String(20), nullable=True)
+    deposit_amount = db.Column(db.Float, nullable=True)
+    hash_id = db.Column(db.String(6), nullable=True)
 
     def __init__(
         self,
@@ -808,6 +889,8 @@ class CampaignClick(db.Model):
         fbclid: str,
         rma: str,
         ulb: int,
+        kclid: Optional[str],
+        pay: Optional[int],
         request_parameters: dict,
         campaign_hash: str,
         campaign_id: int,
@@ -818,12 +901,18 @@ class CampaignClick(db.Model):
         referer: str,
         timestamp: datetime,
         blocked: bool,
+        geo: Optional[str] = None,
+        device: Optional[str] = None,
+        hash_id: Optional[str] = None,
+        app_id: Optional[int] = None,
     ):
         self.click_id = click_id
         self.domain = domain
         self.fbclid = fbclid
         self.rma = rma
         self.ulb = ulb
+        self.kclid = kclid
+        self.pay = pay
         self.request_parameters = request_parameters
         self.campaign_hash = campaign_hash
         self.campaign_id = campaign_id
@@ -834,6 +923,10 @@ class CampaignClick(db.Model):
         self.referer = referer
         self.timestamp = timestamp
         self.blocked = blocked
+        self.geo = geo
+        self.device = device
+        self.hash_id = hash_id
+        self.app_id = app_id
 
     def __repr__(self):
         return f"<CampaignClick {self.id}>"
@@ -841,16 +934,22 @@ class CampaignClick(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
+            "geo": self.geo,
+            "device": self.device,
             "click_id": self.click_id,
             "domain": self.domain,
             "fbclid": self.fbclid,
             "rma": self.rma,
             "ulb": self.ulb,
+            "pay": self.pay,
             "request_parameters": self.request_parameters,
             "campaign_hash": self.campaign_hash,
             "campaign_id": self.campaign_id,
             "app_id": self.app_id,
             "app_installed": self.app_installed,
+            "app_registered": self.app_registered,
+            "app_deposited": self.app_deposited,
+            "appclid": self.appclid,
             "ip": self.ip,
             "user_agent": self.user_agent,
             "referer": self.referer,
@@ -861,17 +960,16 @@ class CampaignClick(db.Model):
             "conversion_event": self.conversion_event,
             "conversion_timestamp": self.conversion_timestamp,
             "conversion_sent": self.conversion_sent,
+            "hash_id": self.hash_id,
         }
 
     def update_conversion(self, event: str, conversion_sent: bool = False):
         self.conversion_event = event
         self.conversion_sent = conversion_sent
-        self.conversion_timestamp = datetime.now()
-        db.session.commit()
+        self.conversion_timestamp = datetime.now(timezone)
 
     def install_app(self):
         self.app_installed = True
-        db.session.commit()
 
 
 class GeoPrice(db.Model):
@@ -909,24 +1007,108 @@ class GeoPrice(db.Model):
         db.session.commit()
 
 
+class LogMessage(db.Model):
+    __tablename__ = "LogMessages"
+
+    id = db.Column(db.Integer, primary_key=True)
+    campaign_id = db.Column(db.Integer, db.ForeignKey("Campaigns.id"), nullable=True)
+    campaign = relationship("Campaign")
+    click_id = db.Column(db.Integer, db.ForeignKey("CampaignsClicks.id"), nullable=True)
+    click = relationship("CampaignClick")
+    event = db.Column(db.String(20))
+    level = db.Column(db.String(10))
+    module = db.Column(db.String(50))
+    message = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime)
+
+    def __init__(
+        self, 
+        module: str, 
+        message: str, 
+        level: str, 
+        click: Optional[CampaignClick] = None,
+        campaign: Optional[Campaign] = None,
+        event: Optional[str] = None,
+    ):
+        self.level = level
+        self.module = module
+        self.message = message
+        self.timestamp = datetime.now(timezone)
+        self.click = click
+        self.campaign = campaign
+        self.event = event
+
+    def __repr__(self):
+        return f"<LogMessage: {self.message}>"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "clid": self.click.click_id if self.click else None,
+            "campaign_id": self.campaign.id if self.campaign else None,
+            "event": self.event if self.event else None,
+            "level": self.level,
+            "module": self.module,
+            "message": self.message,
+            "timestamp": self.timestamp,
+        }
+    
+    def to_stats_log(self):
+        return {
+            "id": self.id,
+            "clid": self.click.click_id if self.click else None,
+            "campaign_id": self.campaign.id if self.campaign else None,
+            "event": self.event if self.event else None,
+            "message": self.message,
+            "timestamp": self.timestamp,
+        }
+
+
 campaigns_apps = db.Table(
     "campaigns_apps",
     db.Column(
-        "campaign_id", db.Integer, db.ForeignKey("Campaigns.id"), primary_key=True
-    ),
-    db.Column("app_id", db.Integer, db.ForeignKey("Apps.id"), primary_key=True),
+        "campaign_id", 
+        db.Integer, 
+        db.ForeignKey("Campaigns.id"), 
+        primary_key=True
+        ),
+    db.Column(
+        "app_id", 
+        db.Integer, 
+        db.ForeignKey("Apps.id"), 
+        primary_key=True
+        ),
 )
 
 apps_tags = db.Table(
     "apps_tags",
-    db.Column("app_id", db.Integer, db.ForeignKey("Apps.id"), primary_key=True),
-    db.Column("tag_id", db.Integer, db.ForeignKey("AppsTags.id"), primary_key=True),
+    db.Column(
+        "app_id", 
+        db.Integer, 
+        db.ForeignKey("Apps.id"), 
+        primary_key=True
+        ),
+    db.Column(
+        "tag_id", 
+        db.Integer, 
+        db.ForeignKey("AppsTags.id"), 
+        primary_key=True
+        ),
 )
 
 users_allowed_apps = db.Table(
     "users_allowed_apps",
-    db.Column("user_id", db.Integer, db.ForeignKey("Users.id"), primary_key=True),
-    db.Column("app_id", db.Integer, db.ForeignKey("Apps.id"), primary_key=True),
+    db.Column(
+        "user_id", 
+        db.Integer, 
+        db.ForeignKey("Users.id"), 
+        primary_key=True),
+    db.Column(
+        "app_id", 
+        db.Integer, 
+        db.ForeignKey("Apps.id"), 
+        primary_key=True
+        ),
 )
 
 # domains_users = db.Table(

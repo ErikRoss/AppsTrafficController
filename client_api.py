@@ -1,4 +1,5 @@
 import datetime
+from functools import wraps
 import logging
 import os
 from urllib.parse import urlencode
@@ -8,6 +9,7 @@ from typing import Dict, Optional, Tuple
 import py7zr
 from flask import Response, Blueprint, current_app, jsonify, request
 from flask_jwt_extended import create_access_token, current_user, jwt_required
+import pytz
 from sqlalchemy import and_
 
 # from random_word import RandomWords
@@ -20,13 +22,16 @@ from namecheap_api import NamecheapApi
 import server_commands as sc
 
 from app import db
+from config import NAMECHEAP_CONFIRM_EMAIL as registrant_email
 from models import (
     AppTag,
     CampaignLink,
     Campaign,
     GeoPrice,
     Landing,
+    LogMessage,
     SubUser,
+    TopDomain,
     User,
     Transaction,
     App,
@@ -40,8 +45,10 @@ from models import (
 logging.basicConfig(
     filename="logs/api.log",
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+
+timezone = pytz.timezone("Europe/Kiev")
 
 
 try:
@@ -70,6 +77,449 @@ api_endpoint = Blueprint("api", __name__)
 
 
 # ----------------------------------------------------------------------------#
+# Decorators.
+# ----------------------------------------------------------------------------#
+
+
+def check_user_status():
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if current_user.status != "active":
+                return (
+                    jsonify({"error": "Account blocked."}),
+                    401,
+                    {"Content-Type": "application/json"},
+                )
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+# ----------------------------------------------------------------------------#
+# Helper functions.
+# ----------------------------------------------------------------------------#
+
+
+def create_test_admin():
+    user = User.query.filter_by(username="defadmin").first()
+    if not user:
+        user = User(
+            username="defadmin",
+            password=generate_password_hash("Area51!!!"),
+            email="defadmin@defadmin.com",
+            role="admin",
+        )
+        db.session.add(user)
+        db.session.commit()
+        
+
+def create_registrant():
+    registrants = Registrant.query.all()
+    if len(registrants) > 0:
+        return
+    
+    registrant_data = {
+        "address": "829 Vernon Street",
+        "city": "Palm Springs",
+        "country": "US",
+        "email": registrant_email,
+        "first_name": "Jeff",
+        "last_name": "Carson",
+        "phone": "+1.7606736880",
+        "postal_code": "92262",
+        "state_province": "California"
+    }
+    registrant = Registrant(**registrant_data)
+    db.session.add(registrant)
+    db.session.commit()
+
+
+def check_file_extension(filename) -> tuple[str, ...] | None:
+    """
+    Checks if file extension is allowed and it's type if it is.
+    """
+    image_extensions = {"png", "jpg", "jpeg", "gif"}
+    archive_extensions = {"zip", "7z"}
+
+    file_extension = filename.rsplit(".", 1)[1].lower() if "." in filename else None
+    if file_extension in image_extensions:
+        return "image", file_extension  # type: ignore
+    elif file_extension in archive_extensions:
+        return "archive", file_extension  # type: ignore
+    else:
+        return None
+
+
+def save_file(file) -> Dict[str, str] | None:
+    if file:
+        available_extension = check_file_extension(file.filename)
+        if available_extension:
+            file_type = available_extension[0]
+            file_extension = available_extension[1]
+        else:
+            return None
+
+        if file_type == "image":
+            file_name = int(
+                str(datetime.datetime.now(timezone).timestamp()).replace(".", "")
+            )
+            image_name = f"{file_name}.{file_extension}"
+            file.save(os.path.join(current_app.config["UPLOAD_FOLDER"], image_name))
+
+            return {"file": image_name, "type": "image"}
+        elif file_type == "archive":
+            file_name = int(
+                str(datetime.datetime.now(timezone).timestamp()).replace(".", "")
+            )
+            archive_name = f"{file_name}.{file_extension}"
+            file.save(
+                os.path.join(
+                    current_app.config["BASEDIR"],
+                    current_app.config["LANDINGS_FOLDER"],
+                    "archives",
+                    archive_name,
+                )
+            )
+
+            return {"file": archive_name, "type": "archive"}
+
+
+def unpack_archive(archive_name: str) -> Optional[str]:
+    if archive_name:
+        archive_path = os.path.join(
+            current_app.config["LANDINGS_FOLDER"], "archives", archive_name
+        )
+        folder_name = archive_name.rsplit(".", 1)[0]
+        archive_extension = (
+            archive_name.rsplit(".", 1)[1].lower() if "." in archive_name else None
+        )
+        if archive_extension == "zip":
+            with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                zip_ref.extractall(
+                    os.path.join(current_app.config["LANDINGS_FOLDER"], folder_name)
+                )
+        # elif archive_extension == 'rar':
+        #     with rarfile.RarFile(archive_path, 'r') as rar_ref:
+        #         rar_ref.extractall(os.path.join(current_app.config['LANDINGS_FOLDER'], folder_name))
+        elif archive_extension == "7z":
+            with py7zr.SevenZipFile(archive_path, "r") as sz_ref:
+                sz_ref.extractall(
+                    os.path.join(current_app.config["LANDINGS_FOLDER"], folder_name)
+                )
+        else:
+            return None
+
+        return folder_name
+    else:
+        return None
+
+
+def detect_root_dir(folder: str) -> Optional[str]:
+    """
+    Detects folder with index.html file.
+    """
+    if folder:
+        for root, dirs, files in os.walk(folder):
+            for file in files:
+                if file == "index.html":
+                    return os.path.relpath(root, "templates").replace("\\", "/")
+    else:
+        return None
+
+
+def generate_apps_stats(apps_list):
+    """
+    Generates apps stats for campaign from weights proportional to percentage.
+    """
+
+    apps_stats = []
+    total_weight = sum([app.weight for app in apps_list])
+    for app in apps_list:
+        apps_stats.append(
+            {"id": app.id, "weight": app.weight * 100 / total_weight, "visits": 0}
+        )
+
+    return apps_stats
+
+
+def get_registrant_parameters() -> dict:
+    registrant = Registrant.query.first()
+    if registrant:
+        registrant_parameters = {
+            "RegistrantFirstName": registrant.first_name,
+            "TechFirstName": registrant.first_name,
+            "AdminFirstName": registrant.first_name,
+            "AuxBillingFirstName": registrant.first_name,
+            "RegistrantLastName": registrant.last_name,
+            "AdminLastName": registrant.last_name,
+            "TechLastName": registrant.last_name,
+            "AuxBillingLastName": registrant.last_name,
+            "RegistrantAddress1": registrant.address,
+            "TechAddress1": registrant.address,
+            "AdminAddress1": registrant.address,
+            "AuxBillingAddress1": registrant.address,
+            "RegistrantCity": registrant.city,
+            "TechCity": registrant.city,
+            "AdminCity": registrant.city,
+            "AuxBillingCity": registrant.city,
+            "RegistrantStateProvince": registrant.state_province,
+            "TechStateProvince": registrant.state_province,
+            "AdminStateProvince": registrant.state_province,
+            "AuxBillingStateProvince": registrant.state_province,
+            "RegistrantPostalCode": registrant.postal_code,
+            "TechPostalCode": registrant.postal_code,
+            "AdminPostalCode": registrant.postal_code,
+            "AuxBillingPostalCode": registrant.postal_code,
+            "RegistrantCountry": registrant.country,
+            "TechCountry": registrant.country,
+            "AdminCountry": registrant.country,
+            "AuxBillingCountry": registrant.country,
+            "RegistrantPhone": registrant.phone,
+            "TechPhone": registrant.phone,
+            "AdminPhone": registrant.phone,
+            "AuxBillingPhone": registrant.phone,
+            "RegistrantEmailAddress": registrant_email,
+            "TechEmailAddress": registrant_email,
+            "AdminEmailAddress": registrant_email,
+            "AuxBillingEmailAddress": registrant_email,
+        }
+        return registrant_parameters
+    else:
+        return {}
+
+
+def add_domain(domain, test=False, user_id=None) -> dict:
+    logging.info(f"Adding domain {domain}.")
+    if not domain:
+        return {
+            "domain": domain,
+            "success": False,
+            "error": "Domain not provided.",
+        }
+
+    # subdomains_count = 10
+    subdomains = []
+
+    # rand = RandomWords()
+    # while len(subdomains) < subdomains_count:
+    #     # generate random word for subdomain
+    #     subdomain = rand.get_random_word()
+    #     if subdomain not in subdomains:
+    #         subdomains.append(subdomain)
+
+    logging.info(f"Checking domain {domain} availability.")
+    created_at = datetime.datetime.now(timezone)
+    # is_available = namecheap_api.check_domains_availability([domain])[domain]
+    if not test:
+        redirected = False
+        proxied = False
+        https_rewriting = False
+        https_redirect = False
+
+        result = {"domain": domain, "success": True}
+        new_domain = Domain(
+            domain=domain,
+            created=created_at,
+            expires=created_at + datetime.timedelta(days=365),
+            redirected=redirected,
+            proxied=proxied,
+            https_rewriting=https_rewriting,
+            https_redirect=https_redirect,
+            status="waiting",
+        )
+        db.session.add(new_domain)
+        db.session.commit()
+        logging.info(f"Domain {domain} added to database.")
+
+        result["proxied"] = proxied
+        result["redirected"] = redirected
+        result["subdomains"] = subdomains
+    elif test:
+        new_domain = Domain(
+            domain=domain,
+            created=created_at,
+            expires=created_at + datetime.timedelta(days=365),
+            redirected=True,
+            proxied=True,
+            https_rewriting=True,
+            https_redirect=True,
+            status="active",
+            user_id=user_id,
+        )
+        db.session.add(new_domain)
+        db.session.commit()
+
+        result = {
+            "domain": domain,
+            "success": True,
+            "registered": True,
+            "proxied": True,
+            "redirected": True,
+            # "subdomains": subdomains,
+        }
+    else:
+        result = {
+            "domain": domain,
+            "success": False,
+            "error": "Domain is not available.",
+        }
+
+    return result
+
+
+def redirect_domain(domain: Domain):
+    registrant = get_registrant_parameters()
+    namecheap_api = NamecheapApi(**namecheap_api_params)
+    logging.info(f"Registering domain {domain.domain}.")
+    registered = namecheap_api.register_domain(domain.domain, 1, registrant)
+    if not registered["success"]:
+        logging.info(f"Domain {domain.domain} not registered.")
+        domain.update_status("not available")
+        return False
+
+    logging.info(f"Adding domain {domain.domain} to Cloudflare.")
+    nameservers = add_domain_to_cf(domain.domain)
+    domain.zone_id = nameservers["zone_id"]
+    domain.nameservers = nameservers["nameservers"]
+    logging.info(f"Domain {domain.domain} added to Cloudflare.")
+
+    namecheap_api = NamecheapApi(**namecheap_api_params)
+    ns_set = namecheap_api.set_nameservers(domain.domain, domain.nameservers)
+    if ns_set["success"]:
+        domain.proxied = True
+        logging.info(f"Domain {domain} nameservers set.")
+    else:
+        domain.proxied = False
+        logging.info(f"Domain {domain} nameservers not set.")
+
+    domain_info = namecheap_api.get_domain_info(domain.domain)
+    domain.created = datetime.datetime.strptime(domain_info["created"], "%m/%d/%Y")
+    domain.expires = datetime.datetime.strptime(domain_info["expires"], "%m/%d/%Y")
+    domain.redirected = True
+    domain.status = "processing"
+    db.session.commit()
+
+    sc.add_domain_to_nginx(domain.domain, [f"www.{domain.domain}"])
+
+
+def finish_domain_registration(domain: Domain):
+    subdomains = ["@", "www"]
+    try:
+        for subdomain in subdomains:
+            set_dns_records_on_cf(
+                domain.zone_id,
+                current_app.config["DNS_HOST"],
+                subdomain,
+            )
+        domain.redirected = True
+        logging.info(f"Domain {domain} added to Cloudflare.")
+    except Exception:
+        pass
+    else:
+        set_https_rewriting = set_https_rewriting_on_cf(domain.zone_id, "on")
+        if set_https_rewriting["success"]:
+            if set_https_rewriting["result"] == "on":
+                domain.https_rewriting = True
+                logging.info(f"HTTPS rewriting enabled for domain {domain}.")
+            else:
+                domain.https_rewriting = False
+        else:
+            domain.https_rewriting = False
+
+        set_https_redirect = set_https_redirect_on_cf(domain.zone_id, "on")
+        if set_https_redirect["success"]:
+            if set_https_redirect["result"] == "on":
+                domain.https_redirect = True
+                logging.info(f"HTTPS redirect enabled for domain {domain}.")
+            else:
+                domain.https_redirect = False
+        else:
+            domain.https_redirect = False
+
+    # for subdomain in subdomains:
+    #     if subdomain in ["@", "www"]:
+    #         continue
+    #     subdomain_obj = Subdomain(
+    #         subdomain=f"{subdomain}.{domain}",
+    #         status="active",
+    #         expires=new_domain.expires,
+    #         domain_id=new_domain.id,
+    #     )
+    #     db.session.add(subdomain_obj)
+    #     new_domain.subdomains.append(subdomain_obj)
+    #     db.session.commit()
+    #     logging.info(f"Subdomain {subdomain}.{domain} added to database.")
+
+    if all(
+        [
+            domain.redirected,
+            domain.proxied,
+            domain.https_rewriting,
+            domain.https_redirect,
+        ]
+    ):
+        logging.info(f"Domain redirected & activated: {domain.domain}.")
+        domain.update_status("pending")
+
+
+def add_domain_to_cf(domain: str) -> dict:
+    if domain:
+        cf_api = CloudflareApi()
+        added = cf_api.create_zone(domain)
+        if added.get("error"):
+            if added["error"]["code"] == 1061:
+                nameservers = cf_api.get_zone(domain)
+                return {
+                    "success": True,
+                    "nameservers": nameservers["nameservers"],
+                    "zone_id": nameservers["zone_id"],
+                }
+
+            return {"success": False, "error": added["error"]}
+        else:
+            return {
+                "success": True,
+                "nameservers": added["nameservers"],
+                "zone_id": added["zone_id"],
+            }
+    else:
+        return {"success": False, "error": "No domain provided."}
+
+
+def get_domain_zone(domain: str) -> dict:
+    if domain:
+        cf_api = CloudflareApi()
+        zone = cf_api.get_zone(domain)
+        if zone.get("error"):
+            return {"success": False, "error": zone["error"]}
+        else:
+            return zone
+    else:
+        return {"success": False, "error": "No domain provided."}
+
+
+def set_dns_records_on_cf(zone_id: str, ip: str, name: str) -> dict:
+    cf_api = CloudflareApi()
+    result = cf_api.set_dns_records(zone_id, ip, name)
+    return result
+
+
+def set_https_rewriting_on_cf(zone_id: str, state: str) -> dict:
+    cf_api = CloudflareApi()
+    result = cf_api.set_auto_https_rewriting(zone_id, state)
+    return result
+
+
+def set_https_redirect_on_cf(zone_id: str, state: str) -> dict:
+    cf_api = CloudflareApi()
+    result = cf_api.set_always_use_https(zone_id, state)
+    return result
+
+
+# ----------------------------------------------------------------------------#
 # Controllers.
 # ----------------------------------------------------------------------------#
 
@@ -93,7 +543,7 @@ def login():
                     )
                 else:
                     return (
-                        jsonify({"error": "This account is not active."}),
+                        jsonify({"error": "Account blocked."}),
                         401,
                         {"Content-Type": "application/json"},
                     )
@@ -158,6 +608,9 @@ def register():
                 db.session.add(user)
                 db.session.commit()
 
+                android_apps = App.query.filter_by(operating_system="android").all()
+                user.allow_apps(android_apps)
+
                 return (
                     jsonify({"message": "User registered successfully."}),
                     200,
@@ -177,96 +630,12 @@ def register():
         )
 
 
-def check_file_extension(filename) -> tuple[str, ...] | None:
-    """
-    Checks if file extension is allowed and it's type if it is.
-    """
-    image_extensions = {"png", "jpg", "jpeg", "gif"}
-    archive_extensions = {"zip", "7z"}
-
-    file_extension = filename.rsplit(".", 1)[1].lower() if "." in filename else None
-    if file_extension in image_extensions:
-        return "image", file_extension  # type: ignore
-    elif file_extension in archive_extensions:
-        return "archive", file_extension  # type: ignore
-    else:
-        return None
-
-
-def save_file(file) -> Dict[str, str] | None:
-    if file:
-        available_extension = check_file_extension(file.filename)
-        if available_extension:
-            file_type = available_extension[0]
-            file_extension = available_extension[1]
-        else:
-            return None
-
-        if file_type == "image":
-            file_name = int(str(datetime.datetime.now().timestamp()).replace(".", ""))
-            image_name = f"{file_name}.{file_extension}"
-            file.save(os.path.join(current_app.config["UPLOAD_FOLDER"], image_name))
-
-            return {"file": image_name, "type": "image"}
-        elif file_type == "archive":
-            file_name = int(str(datetime.datetime.now().timestamp()).replace(".", ""))
-            archive_name = f"{file_name}.{file_extension}"
-            file.save(
-                os.path.join(
-                    current_app.config["LANDINGS_FOLDER"], "archives", archive_name
-                )
-            )
-
-            return {"file": archive_name, "type": "archive"}
-
-
-def unpack_archive(archive_name: str) -> Optional[str]:
-    if archive_name:
-        archive_path = os.path.join(
-            current_app.config["LANDINGS_FOLDER"], "archives", archive_name
-        )
-        folder_name = archive_name.rsplit(".", 1)[0]
-        archive_extension = (
-            archive_name.rsplit(".", 1)[1].lower() if "." in archive_name else None
-        )
-        if archive_extension == "zip":
-            with zipfile.ZipFile(archive_path, "r") as zip_ref:
-                zip_ref.extractall(
-                    os.path.join(current_app.config["LANDINGS_FOLDER"], folder_name)
-                )
-        # elif archive_extension == 'rar':
-        #     with rarfile.RarFile(archive_path, 'r') as rar_ref:
-        #         rar_ref.extractall(os.path.join(current_app.config['LANDINGS_FOLDER'], folder_name))
-        elif archive_extension == "7z":
-            with py7zr.SevenZipFile(archive_path, "r") as sz_ref:
-                sz_ref.extractall(
-                    os.path.join(current_app.config["LANDINGS_FOLDER"], folder_name)
-                )
-        else:
-            return None
-
-        return folder_name
-    else:
-        return None
-
-
-def detect_root_dir(folder: str) -> Optional[str]:
-    """
-    Detects folder with index.html file.
-    """
-    if folder:
-        for root, dirs, files in os.walk(folder):
-            for file in files:
-                if file == "index.html":
-                    return os.path.relpath(root, "templates").replace("\\", "/")
-    else:
-        return None
-
-
 @api_endpoint.route("/upload_file", methods=["POST"])
 @jwt_required()
 def upload_file():
+    logging.info("Got upload file request")
     if current_user.role != "admin":
+        logging.info("You are not allowed to upload files.")
         return (
             jsonify({"error": "You are not allowed to upload files."}),
             403,
@@ -274,9 +643,12 @@ def upload_file():
         )
 
     file = request.files["file"]
+    logging.info(f"Got file {file}")
     if file:
+        logging.info("Saving file")
         saved_file = save_file(file)
         if saved_file is None:
+            logging.info("File not saved")
             return (
                 jsonify({"error": "File type not allowed."}),
                 400,
@@ -284,6 +656,7 @@ def upload_file():
             )
 
         if saved_file["type"] == "image":
+            logging.info("File type is IMAGE")
             return (
                 jsonify(
                     {
@@ -295,15 +668,18 @@ def upload_file():
                 {"Content-Type": "application/json"},
             )
         elif saved_file["type"] == "archive":
+            logging.info("File type is ARCHIVE")
             try:
                 folder = unpack_archive(saved_file["file"])
             except py7zr.PasswordRequired:
+                logging.info("Archive is password protected.")
                 return (
                     jsonify({"error": "Archive is password protected."}),
                     400,
                     {"Content-Type": "application/json"},
                 )
             except (zipfile.BadZipFile, py7zr.Bad7zFile):
+                logging.info("Archive is corrupted.")
                 return (
                     jsonify({"error": "Archive is corrupted."}),
                     400,
@@ -311,60 +687,45 @@ def upload_file():
                 )
 
             if folder:
+                logging.info(f"Saved to folder {folder}")
                 root_dir = detect_root_dir(
                     os.path.join(current_app.config["LANDINGS_FOLDER"], folder)
                 )
                 if root_dir:
+                    logging.info("Detected root dir")
                     return (
                         jsonify({"file": saved_file["file"], "folder": root_dir}),
                         200,
                         {"Content-Type": "application/json"},
                     )
                 else:
+                    logging.info("Root dir not detected")
                     return (
                         jsonify({"error": "No index.html file found."}),
                         400,
                         {"Content-Type": "application/json"},
                     )
             else:
+                logging.info("Error unpacking archive.")
                 return (
                     jsonify({"error": "Error unpacking archive."}),
                     400,
                     {"Content-Type": "application/json"},
                 )
         else:
+            logging.info("File type not allowed.")
             return (
                 jsonify({"error": "File type not allowed."}),
                 400,
                 {"Content-Type": "application/json"},
             )
     else:
+        logging.info("No file provided.")
         return (
             jsonify({"error": "No file provided."}),
             400,
             {"Content-Type": "application/json"},
         )
-
-
-# @app.route('/save_image', methods=['POST'])
-# def save_image():
-#     file = request.files['file']
-#     file_name = save_image_to_file(file)
-
-#     return jsonify({'file': file_name}), 200, {'Content-Type': 'application/json'}
-
-
-# def save_image_to_file(image) -> Optional[str]:
-#     if image:
-#         file_extension = allowed_file_extension(image.filename)
-#         if file_extension:
-#             file_name = int(str(datetime.datetime.now().timestamp()).replace('.', ''))
-#             image_name = f'{file_name}.{file_extension}'
-#             image.save(os.path.join(current_app.config['UPLOAD_FOLDER'], image_name))
-
-#             return f'{current_app.config["UPLOAD_FOLDER"]}/{image_name}'
-#         else:
-#             return None
 
 
 @api_endpoint.route("/users", methods=["GET"])
@@ -433,6 +794,7 @@ def users():
 
 @api_endpoint.route("/users/<int:user_id>", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def user_by_id(user_id: int):
     if current_user.role != "admin" and current_user.id != user_id:
         return (
@@ -632,6 +994,7 @@ def subtract_user_balance():
 
 @api_endpoint.route("/users/<int:user_id>/transactions", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def user_transactions(user_id: int):
     if current_user.role != "admin" and current_user.id != user_id:
         return (
@@ -730,8 +1093,78 @@ def update_user_password():
             )
 
 
+@api_endpoint.route("/users/<int:user_id>/api_key", methods=["GET"])
+@jwt_required()
+@check_user_status()
+def user_panel_key(user_id: int):
+    if current_user.role != "admin" and current_user.id != user_id:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "You are not allowed to view this user panel key.",
+                }
+            ),
+            403,
+            {"Content-Type": "application/json"},
+        )
+
+    user_obj = User.query.get(user_id)
+    if user_obj:
+        return (
+            jsonify({"success": True, "api_key": user_obj.panel_key}),
+            200,
+            {"Content-Type": "application/json"},
+        )
+    else:
+        return (
+            jsonify({"success": False, "error": "User not found."}),
+            404,
+            {"Content-Type": "application/json"},
+        )
+
+
+@api_endpoint.route("/users/<int:user_id>/update_api_key", methods=["PATCH"])
+@jwt_required()
+@check_user_status()
+def generate_user_panel_key(user_id: int):
+    if current_user.role != "admin" and current_user.id != user_id:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "You are not allowed to generate this user panel key.",
+                }
+            ),
+            403,
+            {"Content-Type": "application/json"},
+        )
+
+    user_obj = User.query.get(user_id)
+    if user_obj:
+        user_obj.generate_panel_key()
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "message": "API key updated successfully.",
+                    "panel_key": user_obj.panel_key,
+                }
+            ),
+            200,
+            {"Content-Type": "application/json"},
+        )
+    else:
+        return (
+            jsonify({"success": False, "error": "User not found."}),
+            404,
+            {"Content-Type": "application/json"},
+        )
+
+
 @api_endpoint.route("/users/subusers", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def subusers():
     page = request.args.get("page", default=1, type=int)
     per_page = request.args.get("per_page", default=50, type=int)
@@ -742,14 +1175,14 @@ def subusers():
     else:
         # search all subusers with name or containing search_query
         subusers_query_all = (
-            SubUser.query.filter(SubUser.name.ilike(f"%{search_query}%"))
+            SubUser.query.filter(SubUser.name.ilike(f"%{search_query}%"))  # type: ignore
             .filter_by(owner_id=current_user.id)
             .all()
         )
     if subusers_query_all and isinstance(subusers_query_all, list):
         total_count = len(subusers_query_all)
     elif subusers_query_all and isinstance(subusers_query_all, Query):
-        total_count = subusers_query_all.count()
+        total_count = subusers_query_all.count()  # type: ignore
     else:
         total_count = 0
 
@@ -788,6 +1221,7 @@ def subusers():
 
 @api_endpoint.route("/users/subusers/add", methods=["POST"])
 @jwt_required()
+@check_user_status()
 def add_subuser():
     if request.json:
         name = request.json.get("name")
@@ -811,43 +1245,9 @@ def add_subuser():
             )
 
 
-# @api_endpoint.route('/users/delete/<int:user_id>', methods=['DELETE'])
-# @jwt_required()
-# def delete_user(user_id: int) -> Tuple[Response, int, Dict[str, str]]:
-#     """
-#     Deletes user from database by id.
-
-#     Args:
-#         user_id (int): User id.
-
-#     Returns:
-#         A tuple containing a JSON response with a message or error, a status code,
-#         and a dictionary with content type.
-#     """
-#     user_campaigns = Campaign.query.filter_by(user_id=user_id).all()
-#     for campaign in user_campaigns:
-#         campaign.user_id = None
-#         campaign.user = 'Unknown'
-#         db.session.commit()
-#     user_obj = User.query.get(user_id)
-#     if user_obj:
-#         db.session.delete(user_obj)
-#         db.session.commit()
-#         return (
-#             jsonify({'message': 'User deleted successfully.'}),
-#             200,
-#             {'Content-Type': 'application/json'}
-#         )
-#     else:
-#         return (
-#             jsonify({'error': 'User not found.'}),
-#             404,
-#             {'Content-Type': 'application/json'}
-#         )
-
-
 @api_endpoint.route("/apps", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def apps() -> Tuple[Response, int, Dict[str, str]]:
     """
     Returns all apps in API format.
@@ -855,11 +1255,16 @@ def apps() -> Tuple[Response, int, Dict[str, str]]:
     page = request.args.get("page", default=1, type=int)
     per_page = request.args.get("per_page", default=50, type=int)
     search_query = request.args.get("search_query")
+    search_tag = False
+
+    if search_query:
+        app_tag = AppTag.query.filter_by(tag=search_query).first()
+        if app_tag:
+            search_tag = True
 
     if not search_query and current_user.role == "admin":
         apps_query_all = App.query.all()
     elif not search_query and current_user.role == "user":
-        # apps_query_all = App.query.filter_by(status="active").all()
         apps_query_all = (
             App.query.filter(
                 App.id.in_([app_.id for app_ in current_user.allowed_apps])
@@ -867,16 +1272,33 @@ def apps() -> Tuple[Response, int, Dict[str, str]]:
             .filter_by(status="active")
             .all()
         )
-    elif search_query and current_user.role == "admin":
+    elif search_query and not search_tag and current_user.role == "admin":
         # search all apps with title or tag containing search_query
         apps_query_all = App.query.filter(App.title.ilike(f"%{search_query}%")).all()
-    elif search_query and current_user.role == "user":
+    elif search_query and not search_tag and current_user.role == "user":
         # search all apps with title or tag containing search_query
         apps_query_all = (
             App.query.filter(
                 and_(
                     App.title.ilike(f"%{search_query}%"),
                     App.id.in_(current_user.allowed_apps),
+                )
+            )
+            .filter_by(status="active")
+            .all()
+        )
+    elif search_query and search_tag and current_user.role == "admin":
+        # search all apps with tag containing search_query
+        apps_query_all = App.query.filter(
+            App.tags.any(AppTag.tag == search_query)
+        ).all()
+    elif search_query and search_tag and current_user.role == "user":
+        # search all apps with tag containing search_query
+        apps_query_all = (
+            App.query.filter(
+                and_(
+                    App.tags.any(AppTag.tag == search_query),
+                    App.id.in_([app_.id for app_ in current_user.allowed_apps]),
                 )
             )
             .filter_by(status="active")
@@ -916,17 +1338,35 @@ def apps() -> Tuple[Response, int, Dict[str, str]]:
             .order_by(App.id.desc())
             .paginate(page=page, per_page=per_page, error_out=False)
         )
-    elif search_query and current_user.role == "admin":
+    elif search_query and not search_tag and current_user.role == "admin":
         apps_query = (
             App.query.filter(App.title.ilike(f"%{search_query}%"))
             .order_by(App.id.desc())
             .paginate(page=page, per_page=per_page, error_out=False)
         )
-    elif search_query and current_user.role == "user":
+    elif search_query and not search_tag and current_user.role == "user":
         apps_query = (
             App.query.filter(
                 and_(
                     App.title.ilike(f"%{search_query}%"),
+                    App.id.in_([app_.id for app_ in current_user.allowed_apps]),
+                )
+            )
+            .filter_by(status="active")
+            .order_by(App.id.desc())
+            .paginate(page=page, per_page=per_page, error_out=False)
+        )
+    elif search_query and search_tag and current_user.role == "admin":
+        apps_query = (
+            App.query.filter(App.tags.any(AppTag.tag == search_query))
+            .order_by(App.id.desc())
+            .paginate(page=page, per_page=per_page, error_out=False)
+        )
+    elif search_query and search_tag and current_user.role == "user":
+        apps_query = (
+            App.query.filter(
+                and_(
+                    App.tags.any(AppTag.tag == search_query),
                     App.id.in_([app_.id for app_ in current_user.allowed_apps]),
                 )
             )
@@ -953,6 +1393,7 @@ def apps() -> Tuple[Response, int, Dict[str, str]]:
 
 @api_endpoint.route("/apps/<int:app_id>", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def app_by_id(app_id: int) -> Tuple[Response, int, Dict[str, str]]:
     """
     Returns app by id in API format.
@@ -1127,6 +1568,8 @@ def add_app() -> Tuple[Response, int, Dict[str, str]]:
         app_tags = request.json.get("tags", [])
         app_description = request.json.get("description")
         app_status = request.json.get("status")
+        install_price = request.json.get("install_price")
+        conversion_price = request.json.get("conversion_price")
 
         app_parameters = [
             app_title,
@@ -1154,27 +1597,28 @@ def add_app() -> Tuple[Response, int, Dict[str, str]]:
                     db.session.commit()
                     tags_list.append(new_tag)
 
-            keitaro_id = KeitaroApi().add_stream_to_campaign(app_title)
-            print(keitaro_id)
-
             new_app = App(
                 title=app_title,
                 url=app_url,
-                image=f"{image_folder}/{app_image}"
-                if app_image and image_folder
-                else None,
                 operating_system=app_operating_system.lower(),
                 tags=tags_list,
                 description=app_description,
                 status=app_status,
-                keitaro_id=keitaro_id,
+                install_price=install_price or 0.00,
+                conversion_price=conversion_price or 0.00,
+                image=f"{image_folder}/{app_image}"
+                if app_image and image_folder
+                else None,
             )
             db.session.add(new_app)
             db.session.commit()
 
-            # for tag in tags_list:
-            #     tag.add_app(new_app)
-            # db.session.commit()
+            keitaro_id = KeitaroApi().add_stream_to_campaign(new_app.title, new_app.id)
+            new_app.keitaro_id = keitaro_id
+            db.session.commit()
+
+            if app_operating_system.lower() == "android":
+                new_app.allow_for_users()
 
             return (
                 jsonify({"message": "App added successfully."}),
@@ -1248,19 +1692,9 @@ def update_app_status() -> Tuple[Response, int, Dict[str, str]]:
         )
 
 
-@api_endpoint.route("/apps/delete/<int:app_id>", methods=["DELETE"])
+@api_endpoint.route("/apps/delete", methods=["DELETE"])
 @jwt_required()
-def delete_app(app_id: int) -> Tuple[Response, int, Dict[str, str]]:
-    """
-    Deletes app from database by id.
-
-    Args:
-        app_id (int): App id.
-
-    Returns:
-        A tuple containing a JSON response with a message or error, a status code,
-        and a dictionary with content type.
-    """
+def delete_app() -> Tuple[Response, int, Dict[str, str]]:
     if current_user.role != "admin":
         return (
             jsonify({"error": "You are not allowed to delete apps."}),
@@ -1268,25 +1702,52 @@ def delete_app(app_id: int) -> Tuple[Response, int, Dict[str, str]]:
             {"Content-Type": "application/json"},
         )
 
-    app_obj = App.query.get(app_id)
-    if app_obj:
-        db.session.delete(app_obj)
-        db.session.commit()
-        return (
-            jsonify({"message": "App deleted successfully."}),
-            200,
-            {"Content-Type": "application/json"},
-        )
+    if request.json:
+        app_id = request.json.get("id")
+        deleted = request.json.get("deleted")
+
+        if app_id is None or deleted is None:
+            return (
+                jsonify({"error": "Not all parameters are set."}),
+                400,
+                {"Content-Type": "application/json"},
+            )
+
+        app_obj = App.query.get(app_id)
+        if app_obj:
+            if deleted:
+                if app_obj.keitaro_id:
+                    KeitaroApi().set_stream_deleted(app_obj.keitaro_id)
+                app_obj.set_deleted(deleted)
+
+                return (
+                    jsonify({"success": True, "message": "App deleted successfully."}),
+                    200,
+                    {"Content-Type": "application/json"},
+                )
+            else:
+                return (
+                    jsonify({"success": True, "message": "App not deleted."}),
+                    200,
+                    {"Content-Type": "application/json"},
+                )
+        else:
+            return (
+                jsonify({"error": "App not found."}),
+                404,
+                {"Content-Type": "application/json"},
+            )
     else:
         return (
-            jsonify({"error": "App not found."}),
-            404,
+            jsonify({"error": "No json data."}),
+            400,
             {"Content-Type": "application/json"},
         )
 
 
 @api_endpoint.route("/apps/tags", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def app_tags() -> Tuple[Response, int, Dict[str, str]]:
     """
     Returns all app tags in API format.
@@ -1466,6 +1927,7 @@ def disallow_app_for_users() -> Tuple[Response, int, Dict[str, str]]:
 
 @api_endpoint.route("/campaigns", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def campaigns() -> Tuple[Response, int, Dict[str, str]]:
     """
     Returns all campaigns in API format.
@@ -1604,6 +2066,7 @@ def campaigns() -> Tuple[Response, int, Dict[str, str]]:
 
 @api_endpoint.route("/campaigns/<int:campaign_id>", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def campaign_by_id(campaign_id: int) -> Tuple[Response, int, Dict[str, str]]:
     """
     Returns campaign by id in API format.
@@ -1643,23 +2106,9 @@ def campaign_by_id(campaign_id: int) -> Tuple[Response, int, Dict[str, str]]:
         )
 
 
-def generate_apps_stats(apps_list):
-    """
-    Generates apps stats for campaign from weights proportional to percentage.
-    """
-
-    apps_stats = []
-    total_weight = sum([app.weight for app in apps_list])
-    for app in apps_list:
-        apps_stats.append(
-            {"id": app.id, "weight": app.weight * 100 / total_weight, "visits": 0}
-        )
-
-    return apps_stats
-
-
 @api_endpoint.route("/campaigns/add", methods=["POST"])
 @jwt_required()
+@check_user_status()
 def add_campaign() -> Tuple[Response, int, Dict[str, str]]:
     """
     Adds new campaign to database with data from request json.
@@ -1702,7 +2151,10 @@ def add_campaign() -> Tuple[Response, int, Dict[str, str]]:
                 for app_ in campaign_apps:
                     app_["weight"] = 100 / len(campaign_apps)
 
-            rest_weight = 100 - sum([app_["weight"] for app_ in campaign_apps])
+            if sum([app_["weight"] for app_ in campaign_apps]) < 100:
+                rest_weight = 100 - sum([app_["weight"] for app_ in campaign_apps])
+            else:
+                rest_weight = 0
             for app_ in campaign_apps:
                 app_obj = App.query.get(app_["id"])
                 if app_obj:
@@ -1808,6 +2260,7 @@ def add_campaign() -> Tuple[Response, int, Dict[str, str]]:
 
 @api_endpoint.route("/campaigns/update_status", methods=["PATCH"])
 @jwt_required()
+@check_user_status()
 def update_campaign_status() -> Tuple[Response, int, Dict[str, str]]:
     """
     Updates campaign status in database with data from request json.
@@ -1816,13 +2269,6 @@ def update_campaign_status() -> Tuple[Response, int, Dict[str, str]]:
         A tuple containing a JSON response with a message or error, a status code,
         and a dictionary with content type.
     """
-    if not current_user.role:
-        return (
-            jsonify({"error": "You are not allowed to update campaign status."}),
-            403,
-            {"Content-Type": "application/json"},
-        )
-
     if request.json:
         campaign_id = request.json.get("id")
         campaign_status = request.json.get("status")
@@ -1872,6 +2318,7 @@ def update_campaign_status() -> Tuple[Response, int, Dict[str, str]]:
 
 @api_endpoint.route("/campaigns/send_to_archive", methods=["PATCH"])
 @jwt_required()
+@check_user_status()
 def send_campaign_to_archive() -> Tuple[Response, int, Dict[str, str]]:
     """
     Sends campaign to archive.
@@ -1884,7 +2331,7 @@ def send_campaign_to_archive() -> Tuple[Response, int, Dict[str, str]]:
         campaign_id = request.json.get("id")
         is_archived = request.json.get("archived")
 
-        if campaign_id and (is_archived is True or is_archived is False):
+        if campaign_id and is_archived is not None:
             campaign_obj = Campaign.query.get(campaign_id)
             if campaign_obj:
                 if (
@@ -1930,6 +2377,7 @@ def send_campaign_to_archive() -> Tuple[Response, int, Dict[str, str]]:
 
 @api_endpoint.route("/campaigns/update_subuser", methods=["PATCH"])
 @jwt_required()
+@check_user_status()
 def update_campaign_subuser() -> Tuple[Response, int, Dict[str, str]]:
     if request.json:
         campaign_id = request.json.get("id")
@@ -2034,8 +2482,140 @@ def update_campaign() -> Tuple[Response, int, Dict[str, str]]:
         )
 
 
+@api_endpoint.route("/campaigns/<int:campaign_id>/stats", methods=["GET"])
+@jwt_required()
+@check_user_status()
+def campaign_statistics(campaign_id: int) -> Tuple[Response, int, Dict[str, str]]:
+    """
+    Returns campaign statistics by id in API format.
+
+    Args:
+        campaign_id (int): Campaign id.
+    """
+    campaign_obj = Campaign.query.get(campaign_id)
+    page = request.args.get("page", default=1, type=int)
+    per_page = request.args.get("per_page", default=50, type=int)
+    search_query = request.args.get("search_query")
+
+    if campaign_obj:
+        if current_user.role != "admin" and campaign_obj.user_id != current_user.id:
+            return (
+                jsonify(
+                    {"success": False, "error": "You are not allowed to this view."}
+                ),
+                403,
+                {"Content-Type": "application/json"},
+            )
+
+        clicks = 0
+        installs = 0
+        registrations = 0
+        deposits = 0
+        if not search_query:
+            campaign_logs = LogMessage.query.filter_by(campaign=campaign_obj).all()
+
+            if campaign_logs:
+                for log in campaign_logs:
+                    if log.event == "click":
+                        clicks += 1
+                    elif log.event == "install":
+                        installs += 1
+                    elif log.event == "registration":
+                        registrations += 1
+                    elif log.event == "deposit":
+                        deposits += 1
+            total_count = len(campaign_logs)
+        else:
+            campaign_logs = LogMessage.query.filter_by(
+                campaign=campaign_obj, event=search_query
+            ).all()
+            for log in campaign_logs:
+                if log.event == "click":
+                    clicks += 1
+                elif log.event == "install":
+                    installs += 1
+                elif log.event == "registration":
+                    registrations += 1
+                elif log.event == "deposit":
+                    deposits += 1
+            total_count = len(campaign_logs)
+
+        if total_count == 0:
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "logs": [],
+                        "total_count": 0,
+                        "stats": {
+                            "clicks": clicks,
+                            "installs": installs,
+                            "registrations": registrations,
+                            "deposits": deposits,
+                        },
+                    }
+                ),
+                200,
+                {"Content-Type": "application/json"},
+            )
+
+        if not search_query:
+            campaign_logs_query = (
+                LogMessage.query.filter_by(campaign=campaign_obj)
+                .order_by(LogMessage.id.desc())
+                .paginate(page=page, per_page=per_page, error_out=False)
+            )
+
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "logs": [log.to_dict() for log in campaign_logs_query],
+                        "total_count": total_count,
+                        "stats": {
+                            "clicks": clicks,
+                            "installs": installs,
+                            "registrations": registrations,
+                            "deposits": deposits,
+                        },
+                    }
+                ),
+                200,
+                {"Content-Type": "application/json"},
+            )
+        else:
+            campaign_logs_query = (
+                LogMessage.query.filter_by(campaign=campaign_obj, event=search_query)
+                .order_by(LogMessage.id.desc())
+                .paginate(page=page, per_page=per_page, error_out=False)
+            )
+
+            return (
+                jsonify(
+                    {
+                        "logs": [log.to_dict() for log in campaign_logs_query],
+                        "total_count": total_count,
+                        "clicks": clicks,
+                        "installs": installs,
+                        "registrations": registrations,
+                        "deposits": deposits,
+                    }
+                ),
+                200,
+                {"Content-Type": "application/json"},
+            )
+
+    else:
+        return (
+            jsonify({"error": "Campaign not found."}),
+            404,
+            {"Content-Type": "application/json"},
+        )
+
+
 @api_endpoint.route("/campaigns/delete/<int:campaign_id>", methods=["DELETE"])
 @jwt_required()
+@check_user_status()
 def delete_campaign(campaign_id: int) -> Tuple[Response, int, Dict[str, str]]:
     """
     Deletes campaign from database by id.
@@ -2194,8 +2774,87 @@ def update_registrant():
         )
 
 
+@api_endpoint.route("/domains/top", methods=["GET"])
+@jwt_required()
+def top_domains() -> Tuple[Response, int, Dict[str, str]]:
+    if current_user.role != "admin":
+        return (
+            jsonify(
+                {"success": False, "error": "You are not allowed to view top domains."}
+            ),
+            403,
+            {"Content-Type": "application/json"},
+        )
+
+    domains = TopDomain.query.all()
+    if domains:
+        return (
+            jsonify(
+                {"success": True, "top_domains": [domain.name for domain in domains]}
+            ),
+            200,
+            {"Content-Type": "application/json"},
+        )
+    else:
+        return (
+            jsonify({"success": True, "top_domains": []}),
+            200,
+            {"Content-Type": "application/json"},
+        )
+
+
+@api_endpoint.route("/domains/top/add", methods=["POST"])
+@jwt_required()
+def add_top_domain() -> Tuple[Response, int, Dict[str, str]]:
+    if current_user.role != "admin":
+        return (
+            jsonify(
+                {"success": False, "error": "You are not allowed to add top domains."}
+            ),
+            403,
+            {"Content-Type": "application/json"},
+        )
+
+    if request.json:
+        top_domain_name = request.json.get("name")
+        top_domain = TopDomain.query.filter_by(name=top_domain_name).first()
+        if top_domain:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Top domain with this name already exists.",
+                    }
+                ),
+                409,
+                {"Content-Type": "application/json"},
+            )
+        else:
+            new_top_domain = TopDomain(name=top_domain_name)
+            db.session.add(new_top_domain)
+            db.session.commit()
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "message": "Top domain added successfully.",
+                        "top_domain": top_domain_name,
+                    }
+                ),
+                200,
+                {"Content-Type": "application/json"},
+            )
+    else:
+        return (
+            jsonify({"error": "No json data."}),
+            400,
+            {"Content-Type": "application/json"},
+        )
+
+
 @api_endpoint.route("/domains", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def domains() -> Tuple[Response, int, Dict[str, str]]:
     """
     Returns all domains in API format.
@@ -2274,6 +2933,7 @@ def domains() -> Tuple[Response, int, Dict[str, str]]:
 
 @api_endpoint.route("/users/<int:user_id>/domains", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def user_domains(user_id: int) -> Tuple[Response, int, Dict[str, str]]:
     """
     Returns all domains in API format for user with id user_id.
@@ -2343,6 +3003,7 @@ def user_domains(user_id: int) -> Tuple[Response, int, Dict[str, str]]:
 
 @api_endpoint.route("/domains/<int:domain_id>", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def domain_by_id(domain_id: int) -> Tuple[Response, int, Dict[str, str]]:
     """
     Returns domain by id in API format.
@@ -2417,225 +3078,6 @@ def check_domains() -> Tuple[Response, int, Dict[str, str]]:
             400,
             {"Content-Type": "application/json"},
         )
-
-
-def get_registrant_parameters() -> dict:
-    registrant = Registrant.query.first()
-    if registrant:
-        registrant_parameters = {
-            "RegistrantFirstName": registrant.first_name,
-            "TechFirstName": registrant.first_name,
-            "AdminFirstName": registrant.first_name,
-            "AuxBillingFirstName": registrant.first_name,
-            "RegistrantLastName": registrant.last_name,
-            "AdminLastName": registrant.last_name,
-            "TechLastName": registrant.last_name,
-            "AuxBillingLastName": registrant.last_name,
-            "RegistrantAddress1": registrant.address,
-            "TechAddress1": registrant.address,
-            "AdminAddress1": registrant.address,
-            "AuxBillingAddress1": registrant.address,
-            "RegistrantCity": registrant.city,
-            "TechCity": registrant.city,
-            "AdminCity": registrant.city,
-            "AuxBillingCity": registrant.city,
-            "RegistrantStateProvince": registrant.state_province,
-            "TechStateProvince": registrant.state_province,
-            "AdminStateProvince": registrant.state_province,
-            "AuxBillingStateProvince": registrant.state_province,
-            "RegistrantPostalCode": registrant.postal_code,
-            "TechPostalCode": registrant.postal_code,
-            "AdminPostalCode": registrant.postal_code,
-            "AuxBillingPostalCode": registrant.postal_code,
-            "RegistrantCountry": registrant.country,
-            "TechCountry": registrant.country,
-            "AdminCountry": registrant.country,
-            "AuxBillingCountry": registrant.country,
-            "RegistrantPhone": registrant.phone,
-            "TechPhone": registrant.phone,
-            "AdminPhone": registrant.phone,
-            "AuxBillingPhone": registrant.phone,
-            "RegistrantEmailAddress": registrant.email,
-            "TechEmailAddress": registrant.email,
-            "AdminEmailAddress": registrant.email,
-            "AuxBillingEmailAddress": registrant.email,
-        }
-        return registrant_parameters
-    else:
-        return {}
-
-
-def add_domain(domain, test=False, user_id=None) -> dict:
-    logging.info(f"Adding domain {domain}.")
-    if not domain:
-        return {
-            "domain": domain,
-            "success": False,
-            "error": "Domain not provided.",
-        }
-
-    # subdomains_count = 10
-    subdomains = []
-
-    # rand = RandomWords()
-    # while len(subdomains) < subdomains_count:
-    #     # generate random word for subdomain
-    #     subdomain = rand.get_random_word()
-    #     if subdomain not in subdomains:
-    #         subdomains.append(subdomain)
-
-    logging.info(f"Checking domain {domain} availability.")
-    # is_available = namecheap_api.check_domains_availability([domain])[domain]
-    if not test:
-        redirected = False
-        proxied = False
-        https_rewriting = False
-        https_redirect = False
-
-        result = {"domain": domain, "success": True}
-        new_domain = Domain(
-            domain=domain,
-            created=datetime.datetime.now(),
-            expires=datetime.datetime.now() + datetime.timedelta(days=365),
-            redirected=redirected,
-            proxied=proxied,
-            https_rewriting=https_rewriting,
-            https_redirect=https_redirect,
-            status="waiting",
-        )
-        db.session.add(new_domain)
-        db.session.commit()
-        logging.info(f"Domain {domain} added to database.")
-
-        result["proxied"] = proxied
-        result["redirected"] = redirected
-        result["subdomains"] = subdomains
-    elif test:
-        new_domain = Domain(
-            domain=domain,
-            created=datetime.datetime.now(),
-            expires=datetime.datetime.now() + datetime.timedelta(days=365),
-            redirected=True,
-            proxied=True,
-            https_rewriting=True,
-            https_redirect=True,
-            status="active",
-            user_id=user_id,
-        )
-        db.session.add(new_domain)
-        db.session.commit()
-
-        result = {
-            "domain": domain,
-            "success": True,
-            "registered": True,
-            "proxied": True,
-            "redirected": True,
-            # "subdomains": subdomains,
-        }
-    else:
-        result = {
-            "domain": domain,
-            "success": False,
-            "error": "Domain is not available.",
-        }
-
-    return result
-
-
-def redirect_domain(domain: Domain):
-    registrant = get_registrant_parameters()
-    namecheap_api = NamecheapApi(**namecheap_api_params)
-    logging.info(f"Registering domain {domain.domain}.")
-    registered = namecheap_api.register_domain(domain.domain, 1, registrant)
-    if not registered["success"]:
-        logging.info(f"Domain {domain.domain} not registered.")
-        domain.update_status("not available")
-        return False
-
-    logging.info(f"Adding domain {domain.domain} to Cloudflare.")
-    nameservers = add_domain_to_cf(domain.domain)
-    domain.zone_id = nameservers["zone_id"]
-    domain.nameservers = nameservers["nameservers"]
-    logging.info(f"Domain {domain.domain} added to Cloudflare.")
-
-    namecheap_api = NamecheapApi(**namecheap_api_params)
-    ns_set = namecheap_api.set_nameservers(domain.domain, domain.nameservers)
-    if ns_set["success"]:
-        domain.proxied = True
-        logging.info(f"Domain {domain} nameservers set.")
-    else:
-        domain.proxied = False
-        logging.info(f"Domain {domain} nameservers not set.")
-
-    domain_info = namecheap_api.get_domain_info(domain.domain)
-    domain.created = datetime.datetime.strptime(domain_info["created"], "%m/%d/%Y")
-    domain.expires = datetime.datetime.strptime(domain_info["expires"], "%m/%d/%Y")
-    domain.redirected = True
-    domain.status = "processing"
-    db.session.commit()
-
-    sc.add_domain_to_nginx(domain.domain, [f"www.{domain.domain}"])
-
-
-def finish_domain_registration(domain: Domain):
-    subdomains = ["@", "www"]
-    try:
-        for subdomain in subdomains:
-            set_dns_records_on_cf(
-                domain.zone_id,
-                current_app.config["DNS_HOST"],
-                subdomain,
-            )
-        domain.redirected = True
-        logging.info(f"Domain {domain} added to Cloudflare.")
-    except Exception:
-        pass
-    else:
-        set_https_rewriting = set_https_rewriting_on_cf(domain.zone_id, "on")
-        if set_https_rewriting["success"]:
-            if set_https_rewriting["result"] == "on":
-                domain.https_rewriting = True
-                logging.info(f"HTTPS rewriting enabled for domain {domain}.")
-            else:
-                domain.https_rewriting = False
-        else:
-            domain.https_rewriting = False
-
-        set_https_redirect = set_https_redirect_on_cf(domain.zone_id, "on")
-        if set_https_redirect["success"]:
-            if set_https_redirect["result"] == "on":
-                domain.https_redirect = True
-                logging.info(f"HTTPS redirect enabled for domain {domain}.")
-            else:
-                domain.https_redirect = False
-        else:
-            domain.https_redirect = False
-
-    # for subdomain in subdomains:
-    #     if subdomain in ["@", "www"]:
-    #         continue
-    #     subdomain_obj = Subdomain(
-    #         subdomain=f"{subdomain}.{domain}",
-    #         status="active",
-    #         expires=new_domain.expires,
-    #         domain_id=new_domain.id,
-    #     )
-    #     db.session.add(subdomain_obj)
-    #     new_domain.subdomains.append(subdomain_obj)
-    #     db.session.commit()
-    #     logging.info(f"Subdomain {subdomain}.{domain} added to database.")
-
-    if all(
-        [
-            domain.redirected,
-            domain.proxied,
-            domain.https_rewriting,
-            domain.https_redirect,
-        ]
-    ):
-        logging.info(f"Domain redirected & activated: {domain.domain}.")
-        domain.update_status("pending")
 
 
 @api_endpoint.route("/domains/add", methods=["POST"])
@@ -2763,60 +3205,6 @@ def get_domain_dns_hosts():
             400,
             {"Content-Type": "application/json"},
         )
-
-
-def add_domain_to_cf(domain: str) -> dict:
-    if domain:
-        cf_api = CloudflareApi()
-        added = cf_api.create_zone(domain)
-        if added.get("error"):
-            if added["error"]["code"] == 1061:
-                nameservers = cf_api.get_zone(domain)
-                return {
-                    "success": True,
-                    "nameservers": nameservers["nameservers"],
-                    "zone_id": nameservers["zone_id"],
-                }
-
-            return {"success": False, "error": added["error"]}
-        else:
-            return {
-                "success": True,
-                "nameservers": added["nameservers"],
-                "zone_id": added["zone_id"],
-            }
-    else:
-        return {"success": False, "error": "No domain provided."}
-
-
-def get_domain_zone(domain: str) -> dict:
-    if domain:
-        cf_api = CloudflareApi()
-        zone = cf_api.get_zone(domain)
-        if zone.get("error"):
-            return {"success": False, "error": zone["error"]}
-        else:
-            return zone
-    else:
-        return {"success": False, "error": "No domain provided."}
-
-
-def set_dns_records_on_cf(zone_id: str, ip: str, name: str) -> dict:
-    cf_api = CloudflareApi()
-    result = cf_api.set_dns_records(zone_id, ip, name)
-    return result
-
-
-def set_https_rewriting_on_cf(zone_id: str, state: str) -> dict:
-    cf_api = CloudflareApi()
-    result = cf_api.set_auto_https_rewriting(zone_id, state)
-    return result
-
-
-def set_https_redirect_on_cf(zone_id: str, state: str) -> dict:
-    cf_api = CloudflareApi()
-    result = cf_api.set_always_use_https(zone_id, state)
-    return result
 
 
 @api_endpoint.route("/domains/set_nameservers", methods=["POST"])
@@ -3118,6 +3506,7 @@ def assign_domain_to_user():
 
 @api_endpoint.route("/domains/update_subuser", methods=["PATCH"])
 @jwt_required()
+@check_user_status()
 def update_subuser():
     if request.json:
         domain_id = request.json.get("id")
@@ -3163,11 +3552,13 @@ def update_subuser():
 
 @api_endpoint.route("/domains/purchase", methods=["POST"])
 @jwt_required()
+@check_user_status()
 def purchase_domain():
-    try:
-        domain_id = request.json.get("id")
-    except Exception:
+    if request.json:
+        domain_id = request.json.get("id", None)
+    else:
         domain_id = None
+
     # subdomains_count = request.json.get("subdomains_count", 0)
     if domain_id:
         domain_obj = Domain.query.get(domain_id)
@@ -3678,6 +4069,7 @@ def set_subdomain_paid():
 
 @api_endpoint.route("/landings", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def landings():
     page = request.args.get("page", default=1, type=int)
     per_page = request.args.get("per_page", default=50, type=int)
@@ -3730,6 +4122,7 @@ def landings():
 
 @api_endpoint.route("/landings/<int:landing_id>", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def landing_by_id(landing_id):
     landing = Landing.query.get(landing_id)
     if landing:
@@ -3935,6 +4328,7 @@ def campaign_link_by_id(campaign_link_id):
 
 @api_endpoint.route("/generate_campaign_link", methods=["POST"])
 @jwt_required()
+@check_user_status()
 def generate_campaign_link():
     if request.json:
         domain_id = request.json.get("domain_id")
@@ -4004,7 +4398,12 @@ def generate_campaign_link():
                         {"Content-Type": "application/json"},
                     )
 
-                ready_link = f"https://{domain_obj.domain}/?uchsik={campaign_obj.hash_code}&{urlencode(additional_parameters)}"
+                if additional_parameters:
+                    ready_link = f"https://{domain_obj.domain}/?uchsik={campaign_obj.hash_code}&{urlencode(additional_parameters)}"
+                else:
+                    ready_link = (
+                        f"https://{domain_obj.domain}/?uchsik={campaign_obj.hash_code}"
+                    )
             elif subdomain_obj:
                 if (
                     current_user.role != "admin"
@@ -4102,6 +4501,7 @@ def update_campaign_link_status():
 
 @api_endpoint.route("/campaign_clicks", methods=["GET"])
 @jwt_required()
+@check_user_status()
 def campaign_clicks():
     page = request.args.get("page", default=1, type=int)
     per_page = request.args.get("per_page", default=50, type=int)
@@ -4303,6 +4703,42 @@ def add_geo_price():
             400,
             {"Content-Type": "application/json"},
         )
+
+
+@api_endpoint.route("/log_messages", methods=["GET"])
+@jwt_required()
+@check_user_status()
+def log_messages():
+    page = request.args.get("page", default=1, type=int)
+    per_page = request.args.get("per_page", default=50, type=int)
+
+    log_messages_query = LogMessage.query.all()
+    if log_messages_query:
+        total_count = len(log_messages_query)
+    else:
+        total_count = 0
+
+    if total_count == 0:
+        return (
+            jsonify({"log_messages": [], "total_count": 0}),
+            200,
+            {"Content-Type": "application/json"},
+        )
+
+    log_messages_query = LogMessage.query.order_by(LogMessage.id.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    if log_messages_query:
+        log_messages = [log_message.to_dict() for log_message in log_messages_query]
+    else:
+        log_messages = []
+
+    return (
+        jsonify({"log_messages": log_messages, "total_count": total_count}),
+        200,
+        {"Content-Type": "application/json"},
+    )
 
 
 # Error handlers

@@ -24,6 +24,7 @@ class NamecheapApi:
         """
         params["Command"] = command
         if len(params) < 11:
+            print("GET")
             response = requests.get(self.request_url, params=params)
         else:
             print("POST")
@@ -151,7 +152,10 @@ class NamecheapApi:
         return result
 
     def register_domain(
-        self, domain: str, years: int = 1, customer_parameters: Dict[str, Any] = {}
+        self, 
+        domain: str, 
+        years: int = 1, 
+        customer_parameters: Dict[str, Any] = {}
     ) -> Dict[str, Any]:
         """
         Register domain

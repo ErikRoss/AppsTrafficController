@@ -4,16 +4,23 @@ import subprocess
 
 try:
     logging.basicConfig(
-        filename="/home/appscontroller/appstrafficcontroller/logs/server_commands.log",
+        filename="/home/appscontroller/appstrafficcontroller/app/logs/server_commands.log",
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 except FileNotFoundError:
-    logging.basicConfig(
-        filename="logs/server_commands.log",
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-    )
+    try:
+        logging.basicConfig(
+            filename="app/logs/server_commands.log",
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+    except FileNotFoundError:
+        logging.basicConfig(
+            filename="logs/server_commands.log",
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
 
 
 def run_sudo_command(command: list) -> subprocess.CompletedProcess:
@@ -55,14 +62,14 @@ server {{
 
     location / {{
         include proxy_params;
-        proxy_pass http://unix:/home/appscontroller/appstrafficcontroller/appscontroller.sock;
+        proxy_pass http://unix:/home/appscontroller/app/appscontroller.sock;
     }}
 }}
 """
 
     logging.info(f"Wriring config file for {domain}")
     # Record the configuration file in the file system
-    filename = "/etc/nginx/sites-available/appctrlonline"
+    filename = "/etc/nginx/sites-available/appscontroller"
     with open(filename, "a", encoding="utf-8") as f:
         f.write(config)
     logging.info(f"Config file for {domain} was written")
