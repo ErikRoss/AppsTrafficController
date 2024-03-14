@@ -39,6 +39,8 @@ from config import SQLALCHEMY_DATABASE_URI as DB_URI
 from database import db
 from keitaro import KeitaroApi
 from logger import save_log_message
+from manage.campaign_click_controller import CampaignClickController
+from manage.global_threads_storage import GlobalThreadsStorage
 from models import App, Campaign, Landing, CampaignClick, Transaction, User
 
 
@@ -50,6 +52,11 @@ app = Flask(__name__)
 app.config.from_object("config")
 app.app_context().push()
 CORS(app)
+
+# It will be possible to perform background tasks
+#  even after the method where the thread was called has completed
+global_threads_storage = GlobalThreadsStorage(app)
+global_threads_storage.start_watcher()
 
 db.init_app(app)
 migrate = Migrate(app, db)
@@ -375,6 +382,10 @@ def get_resources(filename):
 
 @app.route("/", methods=["GET"])
 def home():
+    return CampaignClickController(request, global_threads_storage).handle_and_get_response()
+
+    # TODO remove in the near future
+
     if not request:
         return (
             jsonify({"error": "No request found."}),
