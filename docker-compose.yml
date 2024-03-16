@@ -1,0 +1,75 @@
+version: "3.9"
+services:
+
+  atc_service:
+    build:
+      dockerfile: Dockerfile
+      context: .
+    container_name: atc_service
+    image: apps_traffic_controller
+    env_file:
+      - .env
+    environment:
+      DB_HOST: "atc_postgres"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        gunicorn --timeout 600 --workers 3 --bind 0.0.0.0:8000 -m 007 wsgi:app
+    ports:
+      - "${DOCKER_PUBLIC_API_PORT}:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./instance:/app/instance
+      - ./static/images:/app/static/images
+
+  atc_postgres:
+    image: postgres:16-bookworm
+    container_name: as_postgres
+    restart: on-failure
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=50"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "effective_cache_size=4GB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "temp_file_limit=10GB"
+      - "-c"
+      - "log_min_duration_statement=200ms"
+      - "-c"
+      - "idle_in_transaction_session_timeout=10s"
+      - "-c"
+      - "lock_timeout=1s"
+      - "-c"
+      - "statement_timeout=60s"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.max=10000"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-p"
+      - "${DB_PORT}"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+    volumes:
+      - db_volume:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT}:${DB_PORT}"
+
+volumes:
+  db_volume:
