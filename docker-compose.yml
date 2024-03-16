@@ -1,31 +1,9 @@
 version: "3.9"
 services:
 
-  atc_service:
-    build:
-      dockerfile: Dockerfile
-      context: .
-    container_name: atc_service
-    image: apps_traffic_controller
-    env_file:
-      - .env
-    environment:
-      DB_HOST: "atc_postgres"
-    command:
-      - /bin/sh
-      - -c
-      - |
-        gunicorn --timeout 600 --workers 3 --bind 0.0.0.0:8000 -m 007 wsgi:app
-    ports:
-      - "${DOCKER_PUBLIC_API_PORT}:8000"
-    volumes:
-      - ./logs:/app/logs
-      - ./instance:/app/instance
-      - ./static/images:/app/static/images
-
   atc_postgres:
     image: postgres:16-bookworm
-    container_name: as_postgres
+    container_name: atc_postgres
     restart: on-failure
     command:
       - "postgres"
@@ -58,7 +36,7 @@ services:
       - "-c"
       - "pg_stat_statements.track=all"
       - "-p"
-      - "${DB_PORT}"
+      - "5432"
     env_file:
       - .env
     environment:
@@ -67,9 +45,31 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       PGDATA: "/var/lib/postgresql/data/pgdata"
     volumes:
-      - db_volume:/var/lib/postgresql/data
+      - atc_volume:/var/lib/postgresql/data
     ports:
-      - "${DB_PORT}:${DB_PORT}"
+      - "${DB_PORT}:5432"
+
+  atc_service:
+    build:
+      dockerfile: Dockerfile
+      context: .
+    container_name: atc_service
+    image: apps_traffic_controller
+    env_file:
+      - .env
+    environment:
+      DB_HOST: "atc_postgres"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        gunicorn --timeout 600 --workers 3 --bind 0.0.0.0:8000 -m 007 wsgi:app
+    ports:
+      - "${DOCKER_PUBLIC_API_PORT}:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./instance:/app/instance
+      - ./static/images:/app/static/images
 
 volumes:
-  db_volume:
+  atc_volume:

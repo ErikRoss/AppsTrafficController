@@ -665,9 +665,12 @@ def get_or_create_basic_users():
 
 
 # get_or_create_basic_users()
-
-create_test_admin()
-create_registrant()
+# TODO make database initialization
+try:
+    create_test_admin()
+    create_registrant()
+except:
+    pass
 
 # Default port:
 """
