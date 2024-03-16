@@ -59,17 +59,27 @@ services:
       - .env
     environment:
       DB_HOST: "atc_postgres"
+      DB_PORT: "5432"
     command:
       - /bin/sh
       - -c
       - |
         gunicorn --timeout 600 --workers 3 --bind 0.0.0.0:8000 -m 007 wsgi:app
-    ports:
-      - "${DOCKER_PUBLIC_API_PORT}:8000"
     volumes:
       - ./logs:/app/logs
       - ./instance:/app/instance
       - ./static/images:/app/static/images
+
+  atc_nginx:
+    image: nginx:latest
+    container_name: atc_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker.nginx.conf:/etc/nginx/templates/default.conf.template
+    env_file:
+      - .env
 
 volumes:
   atc_volume:
