@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 class ClickWeb(ABC):
 
     def handle_web_click(self: "CampaignClickController"):
-        executor = ThreadPoolExecutor()
+        priority_executor = ThreadPoolExecutor(max_workers=1)
 
         try:
 
@@ -41,11 +41,10 @@ class ClickWeb(ABC):
             logging.info("Request args:\n" + str(self.request.args))
 
             # optimization: start getting the app here
-            def select_app() -> App:
-                with self.global_threads_storage.app.app_context():
-                    with self.global_threads_storage.app.test_request_context():
-                        return AppsBalancer(campaign, self.request).select_relevant_app()
-            selected_app_future = executor.submit(select_app)
+            selected_app_future = priority_executor.submit(
+                self.global_threads_storage.wrap_in_context,
+                AppsBalancer(campaign, self.request).select_relevant_app
+            )
 
             # Campaign click
             campaign_click = self._get_web_campaign_click(web_event, campaign)
@@ -91,7 +90,7 @@ class ClickWeb(ABC):
             # try to Redirect to the app
             raise self._app_redirect(selected_app, "Selected", web_event, campaign_click, campaign)
 
-        except BaseError:
+        except (BaseError, SafeAbort):
             pass
 
         except SafeAbortAndResponse as exc:
@@ -102,7 +101,7 @@ class ClickWeb(ABC):
             self.log(self.LOG_WEB, f"{traceback.format_exc()}", "error")
 
         finally:
-            executor.shutdown(wait=False)
+            priority_executor.shutdown(wait=False)
 
         return emergency()
 
@@ -110,6 +109,7 @@ class ClickWeb(ABC):
         web_event = EventWeb(self.request)
 
         if not web_event.uchsik:
+            self.log(self.LOG_WEB, "uchsik is empty", "error")
             raise SafeAbort
 
         return web_event

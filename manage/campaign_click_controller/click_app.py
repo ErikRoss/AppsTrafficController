@@ -50,17 +50,17 @@ class ClickApp(ABC):
 
             # Send conversion to FB
             self.log(self.LOG_APP, f"Send conversion to FB: {app_event.event}")
-            # TODO Optimization: can it be done in the background?
-            conversion_sent = self.send_conversion_to_fb(app_event.event, campaign_click)
-            campaign_click.update_conversion(app_event.event, conversion_sent)
+            # optimization: send in the background
+            self.global_threads_storage.run_in_thread(
+                self.send_conversion_to_fb,
+                app_event.event, campaign_click
+            )
+            campaign_click.update_conversion(app_event.event, conversion_sent=True)
 
             # Get User
             user = User.query.get(campaign.user_id)
 
             if not user:
-                # TODO rewritten from the original.
-                #  If there is no user, an empty response will be returned,
-                #  which will cause an server error
                 raise NotFoundError('User not found.')
 
             # no app in the campaign
@@ -73,7 +73,6 @@ class ClickApp(ABC):
                     campaign=campaign,
                     event="error",
                 )
-                logging.info(f"App not found in click {campaign_click.id}")
                 raise SafeAbort
 
             logging.info(f"User balance: {user.balance}")
@@ -217,70 +216,15 @@ class ClickApp(ABC):
             logging.info("Conversion not sent")
             return False
 
-        # event_params = conversion_params.get(event)
-        # if not event_params:
-        #     return False
-        # timestamp = int(datetime.now(timezone).timestamp())
-        # if campaign_click.fbclid:
-        #     external_id = sha256(
-        #         (campaign_click.fbclid + event_params["xn"]).encode()
-        #     ).hexdigest()
-        # else:
-        #     external_id = sha256(
-        #         (campaign_click.click_id + event_params["xn"]).encode()
-        #     ).hexdigest()
-
-        # conversion_url = "https://www.facebook.com/tr/"
-        # request_params = {
-        #     "id": campaign_click.rma,
-        #     "ev": event_params["ev"],
-        #     "dl": f"https://{campaign_click.domain}",
-        #     "rl": "",
-        #     "if": "false",
-        #     "ts": timestamp,
-        #     "cd[content_ids]": campaign_click.click_id,
-        #     "cd[content_type]": "product",
-        #     "cd[order_id]": campaign_click.click_id,
-        #     "cd[value]": "1",
-        #     "cd[currency]": "USD",
-        #     "sw": 1372,
-        #     "sh": 915,
-        #     "ud[external_id]": external_id,
-        #     "v": "2.9.107",
-        #     "r": "stable",
-        #     "ec": 4,
-        #     "o": 30,
-        #     "fbc": f"fb.1.{timestamp}.{campaign_click.fbclid}",
-        #     "fbp": f"fb.1.{timestamp}.{campaign_click.ulb}",
-        #     "it": timestamp,
-        #     "coo": "false",
-        #     "rqm": "GET",
-        # }
-
-        # full_response_url = (
-        #     conversion_url
-        #     + "?"
-        #     + urlencode(request_params).replace("%5B", "[").replace("%5D", "]")
-        # )
-
-        # logging.info(f"Conversion request params: {request_params}")
-        # logging.info(f"Conversion request url: {conversion_url}")
-        # response = requests.get(full_response_url, params=request_params)
-        # # full_response_url = response.url
-        # if response.status_code == 200:
-        #     logging.info(f"Conversion request url: {full_response_url}")
-        #     logging.info("Conversion sent")
-        #     return True
-        # else:
-        #     logging.info("Conversion not sent")
-        #     return False
-
     def _handle_event_and_get_charge_amount(self: "CampaignClickController", campaign_click: CampaignClick, campaign: Campaign, app_event: EventApp, app: App, user: User) -> float:
 
         # Install event
         if app_event.event.lower() == "install":
-            # TODO Optimization: can it be done in the background?
-            KeitaroApi().set_user_ununique(app.keitaro_id, self.request, str(app.id))
+            # optimization: send in the background
+            self.global_threads_storage.run_in_thread(
+                KeitaroApi().set_user_ununique,
+                app.keitaro_id, self.request, str(app.id)
+            )
             app.count_installs()
             campaign_click.install_app()
             charge_amount = current_app.config[

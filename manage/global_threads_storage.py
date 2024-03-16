@@ -1,46 +1,33 @@
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
 from typing import Callable, Optional, TYPE_CHECKING
 
 
 if TYPE_CHECKING:
     from flask import Flask
+    from concurrent.futures import Future
 
 
 class GlobalThreadsStorage:
     WATCH_INTERVAL_SECONDS = 60
 
     app: "Flask"
-    storage: list["threading.Thread"]
-    _storage_lock: "threading.Lock"
-    _watcher_thread: Optional["threading.Thread"]
+    storage: Queue["Future"]
+    executor: ThreadPoolExecutor
 
     def __init__(self, app: "Flask"):
         self.app = app
-        self.storage = []
-        self._storage_lock = threading.Lock()
-        self._watcher_thread = None
+        self.storage = Queue()
+        self.executor = ThreadPoolExecutor(max_workers=5)
 
-    def run_in_thread(self, func: Callable, *args, **kwargs) -> "threading.Thread":
-        if self._watcher_thread is None:
-            raise IOError('Watcher thread not initialized')
+    def wrap_in_context(self, func: Callable, *args, **kwargs):
+        """ Wrap in Flask app content """
+        with self.app.app_context():
+            with self.app.test_request_context():
+                return func(*args, **kwargs)
 
-        thread = threading.Thread(target=func, args=args, kwargs=kwargs, daemon=True)
-        thread.start()
-
-        with self._storage_lock:
-            self.storage.append(thread)
-            return thread
-
-    def start_watcher(self) -> None:
-        self._watcher_thread = threading.Thread(target=self._watcher, name=str(time.time()), daemon=True)
-        self._watcher_thread.start()
-
-    def _watcher(self):
-        while True:
-
-            # clear finished threads
-            with self._storage_lock:
-                self.storage = [thread for thread in self.storage if thread.is_alive()]
-
-            time.sleep(self.WATCH_INTERVAL_SECONDS)
+    def run_in_thread(self, func: Callable, *args, **kwargs) -> "Future":
+        """ Send to queue of background executing """
+        return self.executor.submit(func, *args, **kwargs)

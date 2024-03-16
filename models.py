@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 import hashlib
 import json
@@ -427,6 +428,7 @@ class Campaign(db.Model):
         landing_title: str = "",
         custom_parameters: dict = {},
         status: str = "inactive",
+        hash_code: str = None
     ):
         self.title = title
         self.offer_url = offer_url
@@ -445,26 +447,16 @@ class Campaign(db.Model):
         self.apps_stats = apps_stats
         self.operating_system = operating_system
         self.app_tags = app_tags
+        self.hash_code = hash_code or self.generate_unique_hash_code()
 
-        self.hash_code = self.calculate_hash_sum()
-
-    def calculate_hash_sum(self):
-        hash_string = json.dumps(
-            {
-                "title": self.title,
-                "description": self.description,
-                "geo": self.geo,
-                "offer_url": self.offer_url,
-                "landing_id": self.landing_id,
-                "landing_title": self.landing_title,
-                "user_id": self.user_id,
-                "apps": [app.id for app in self.apps],
-                "custom_parameters": self.custom_parameters,
-            }
-        )
-        self.hash_code = hashlib.sha256(hash_string.encode("utf-8")).hexdigest()
-
-        return self.hash_code
+    def generate_unique_hash_code(self) -> str:
+        print('generate_unique_hash_code')
+        for attempt in range(100):
+            hash_code = os.urandom(5).hex()
+            if self.__class__.query.filter_by(hash_code=hash_code).count() == 0:
+                return hash_code
+        else:
+            raise ValueError('cannot find unique hash_code')
 
     def __repr__(self):
         return f"<Campaign {self.id}>"

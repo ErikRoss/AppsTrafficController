@@ -1,5 +1,4 @@
 import logging
-from enum import Enum
 from typing import TYPE_CHECKING, Union
 from urllib.parse import urlparse, urlencode, parse_qs, ParseResult
 
@@ -50,7 +49,7 @@ class CampaignClickController(ClickApp, ClickWeb):
 
             # click from app
             if self.request.host in IN_APP_HOSTS:
-                return  self.handle_app_click()
+                return self.handle_app_click()
 
             # click from web
             else:
@@ -103,4 +102,4 @@ class CampaignClickController(ClickApp, ClickWeb):
     @classmethod
     def log(cls, module: str, msg: str, level: str = "info", **kwargs) -> None:
         save_log_message(module, msg, level, **kwargs)
-        getattr(logger, level)(msg)
+        getattr(logger, level)(msg + (f' {kwargs}' if kwargs else ''))

@@ -37,7 +37,7 @@ class EventWeb:
 
         if not self._clid:
             for attempt in range(100):
-                self._clid = secrets.token_hex(3)
+                self._clid = secrets.token_hex(5)
                 if not CampaignClick.query.filter_by(click_id=self._clid).first():
                     break
             else:
