@@ -104,12 +104,12 @@ def check_user_status():
 
 
 def create_test_admin():
-    user = User.query.filter_by(username="defadmin").first()
+    user = User.query.filter_by(username="atbmarket").first()
     if not user:
         user = User(
-            username="defadmin",
-            password=generate_password_hash("Area51!!!"),
-            email="defadmin@defadmin.com",
+            username="atbmarket",
+            password=generate_password_hash("R5lA?WiTG6jp"),
+            email="atbmarket@atbmarket.com",
             role="admin",
         )
         db.session.add(user)

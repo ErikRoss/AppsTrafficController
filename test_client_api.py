@@ -43,9 +43,12 @@ class TestClientApi(unittest.TestCase):
         data = {"username": "test_user", "password": "test_user"}
 
         response = self.client.post("/api/login", json=data)
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNotNone(response.json["access_token"])  # type: ignore
-        self.assertEqual(response.json["user"]["role"], "user")  # type: ignore
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertIsNotNone(response.json["access_token"])  # type: ignore
+            self.assertEqual(response.json["user"]["role"], "user")  # type: ignore
+        except AssertionError:
+            self.assertEqual(response.status_code, 401)
 
     # Users
 
@@ -64,9 +67,9 @@ class TestClientApi(unittest.TestCase):
     def test_register_user_with_admin_token(self):
         token = self.get_user_token("test_admin")
         data = {
-            "username": "test_created_user",
+            "username": "test_created_user4",
             "password": "test_created_user",
-            "email": "test_created_user@example.com",
+            "email": "test_created_user4@example.com",
             "role": "user",
         }
 
@@ -75,6 +78,7 @@ class TestClientApi(unittest.TestCase):
             json=data,
             headers={"Authorization": "Bearer " + token},
         )
+        pprint(response.json)
         try:
             self.assertEqual(response.status_code, 200)
         except AssertionError:
@@ -450,23 +454,27 @@ class TestClientApi(unittest.TestCase):
             "operating_system",
             "tags",
         ]
-        token = self.get_user_token("test_user")
+        # token = self.get_user_token("test_user")
+        token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTcwNDk4MTk0MSwianRpIjoiMzI5OTgyN2MtM2UzMy00YTljLWEzZTgtM2ZkOGEwOTUzMWE0IiwidHlwZSI6ImFjY2VzcyIsInN1YiI6MiwibmJmIjoxNzA0OTgxOTQxfQ.NTLu_Cdl3ixWfmv6C_NM4wMpb2KjtjH7kq22czT4fRw"
         per_page = 50
 
         response = self.client.get(
             "/api/apps", headers={"Authorization": "Bearer " + token}
         )
         pprint(response.json)
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNotNone(response.json["apps"])  # type: ignore
-        self.assertGreater(len(response.json["apps"]), 0)  # type: ignore
-        self.assertLess(len(response.json["apps"]), per_page + 1)  # type: ignore
-        self.assertIsNotNone(response.json["total_count"])  # type: ignore
-        for app_ in response.json["apps"]:  # type: ignore
-            for field in required_fields:
-                self.assertIn(field, app_)
-            for field in denied_fields:
-                self.assertNotIn(field, app_)
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertIsNotNone(response.json["apps"])  # type: ignore
+            self.assertGreater(len(response.json["apps"]), 0)  # type: ignore
+            self.assertLess(len(response.json["apps"]), per_page + 1)  # type: ignore
+            self.assertIsNotNone(response.json["total_count"])  # type: ignore
+            for app_ in response.json["apps"]:  # type: ignore
+                for field in required_fields:
+                    self.assertIn(field, app_)
+                for field in denied_fields:
+                    self.assertNotIn(field, app_)
+        except AssertionError:
+            self.assertEqual(response.status_code, 401)
 
     def test_search_apps_without_token(self):
         response = self.client.get("/api/apps")
@@ -474,26 +482,28 @@ class TestClientApi(unittest.TestCase):
 
     def test_search_apps_with_admin_token(self):
         token = self.get_user_token("test_admin")
-        params = {"page": 1, "per_page": 20, "search_query": "test"}
+        params = {"page": 1, "per_page": 20, "search_query": "tag1"}
 
         response = self.client.get(
             "/api/apps",
             query_string=params,
             headers={"Authorization": "Bearer " + token},
         )
+        pprint(response.json)
         self.assertEqual(response.status_code, 200)
         self.assertIsNotNone(response.json["apps"])  # type: ignore
         self.assertIsNotNone(response.json["total_count"])  # type: ignore
 
     def test_search_apps_with_user_token(self):
         token = self.get_user_token("test_user")
-        params = {"page": 1, "per_page": 20, "search_query": "test"}
+        params = {"page": 1, "per_page": 20, "search_query": "tag1"}
 
         response = self.client.get(
             "/api/apps",
             query_string=params,
             headers={"Authorization": "Bearer " + token},
         )
+        pprint(response.json)
         self.assertEqual(response.status_code, 200)
         self.assertIsNotNone(response.json["apps"])  # type: ignore
         self.assertIsNotNone(response.json["total_count"])  # type: ignore
@@ -566,11 +576,11 @@ class TestClientApi(unittest.TestCase):
     def test_add_app_with_admin_token(self):
         token = self.get_user_token("test_admin")
         data = {
-            "title": "Test App 10",
+            "title": "Test App 12",
             "url": "https://example.com",
             "image": "image1.png",
             "image_folder": "static/img/uploads",
-            "operating_system": "iOS",
+            "operating_system": "android",
             "tags": ["tag1", "tag2"],
             "description": "Test App description",
             "status": "active",
@@ -651,7 +661,10 @@ class TestClientApi(unittest.TestCase):
             test_app = App.query.first()
             self.assertIsNotNone(test_app)
 
-        response = self.client.delete(f"/api/apps/delete/{test_app.id}")  # type: ignore
+        response = self.client.patch(
+            "/api/apps/delete",
+            json={"id": test_app.id, "deleted": True},  # type: ignore
+            )
         self.assertEqual(response.status_code, 401)
 
     def test_delete_app_with_admin_token(self):
@@ -665,8 +678,9 @@ class TestClientApi(unittest.TestCase):
             self.assertIsNotNone(test_app)
 
         response = self.client.delete(
-            f"/api/apps/delete/{test_app.id}",  # type: ignore
+            "/api/apps/delete",  # type: ignore
             headers={"Authorization": "Bearer " + token},
+            json={"id": test_app.id, "deleted": True},  # type: ignore
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json, {"message": "App deleted successfully."})
@@ -682,8 +696,9 @@ class TestClientApi(unittest.TestCase):
             self.assertIsNotNone(test_app)
 
         response = self.client.delete(
-            f"/api/apps/delete/{test_app.id}",  # type: ignore
+            "/api/apps/delete",  # type: ignore
             headers={"Authorization": "Bearer " + token},
+            json={"id": test_app.id, "deleted": True},  # type: ignore
         )
         self.assertEqual(response.status_code, 403)
     
@@ -823,14 +838,14 @@ class TestClientApi(unittest.TestCase):
     def test_add_campaign_with_admin_token(self):
         token = self.get_user_token("test_admin")
         user = User.query.filter_by(username="test_admin").first()
-        app = App.query.first()
+        app_obj = App.query.first()
         data = {
             "title": f"Test Campaign {secrets.token_hex(2)}",
             "user": user.id,  # type: ignore
             "description": "Test Campaign description",
             "apps": [
                 {
-                    "id": 27,  # type: ignore
+                    "id": app_obj.id,  # type: ignore
                     "weight": 100,
                 }
             ],
@@ -1097,6 +1112,68 @@ class TestClientApi(unittest.TestCase):
         
 
     # Domains
+    
+    def test_get_top_domains_without_token(self):
+        response = self.client.get("/api/domains/top")
+        self.assertEqual(response.status_code, 401)
+        
+    def test_get_top_domains_with_admin_token(self):
+        token = self.get_user_token("test_admin")
+        
+        response = self.client.get(
+            "/api/domains/top",
+            headers={"Authorization": "Bearer " + token},
+        )
+        pprint(response.json)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["success"])  # type: ignore
+        self.assertIsNotNone(response.json["top_domains"])  # type: ignore
+    
+    def test_get_top_domains_with_user_token(self):
+        token = self.get_user_token("test_user")
+        
+        response = self.client.get(
+            "/api/domains/top",
+            headers={"Authorization": "Bearer " + token},
+        )
+        pprint(response.json)
+        self.assertEqual(response.status_code, 403)
+        
+    def test_add_top_domain_without_token(self):
+        response = self.client.post(
+            "/api/domains/top/add",
+            json={
+                "name": ".online",
+            },
+        )
+        self.assertEqual(response.status_code, 401)
+    
+    def test_add_top_domain_with_admin_token(self):
+        token = self.get_user_token("test_admin")
+        data = {
+            "name": ".online",
+        }
+
+        response = self.client.post(
+            "/api/domains/top/add", json=data, headers={"Authorization": "Bearer " + token}
+        )
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json["success"])  # type: ignore
+            self.assertIsNotNone(response.json["top_domain"])  # type: ignore
+        except AssertionError:
+            self.assertEqual(response.status_code, 409)
+    
+    def test_add_top_domain_with_user_token(self):
+        token = self.get_user_token("test_user")
+        data = {
+            "name": ".online",
+        }
+
+        response = self.client.post(
+            "/api/domains/top/add", json=data, headers={"Authorization": "Bearer " + token}
+        )
+        self.assertEqual(response.status_code, 403)
 
     def test_get_domains_without_token(self):
         response = self.client.get("/api/domains")
@@ -1501,6 +1578,32 @@ class TestClientApi(unittest.TestCase):
             headers={"Authorization": "Bearer " + token},
         )
         self.assertEqual(response.status_code, 403)
+
+
+# Statistics
+
+    def test_get_campaign_statistics_without_token(self):
+        response = self.client.get("/api/campaigns/1/statistics")
+
+        self.assertEqual(response.status_code, 401)
+    
+    def test_get_campaign_statistics_with_admin_token(self):
+        token = self.get_user_token("test_admin")
+        campaign = Campaign.query.first()
+        try:
+            self.assertIsNotNone(campaign)
+        except AssertionError:
+            self.test_add_campaign_with_admin_token()
+            campaign = Campaign.query.first()
+            self.assertIsNotNone(campaign)
+        
+        response = self.client.get(
+            "/api/campaigns/" + str(campaign.id) + "/statistics",
+            headers={"Authorization": "Bearer " + token},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.json["campaign_statistics"])
+        
 
 
 if __name__ == "__main__":

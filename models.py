@@ -967,6 +967,7 @@ class CampaignClick(db.Model):
         self.conversion_event = event
         self.conversion_sent = conversion_sent
         self.conversion_timestamp = datetime.now(timezone)
+        db.session.commit()
 
     def install_app(self):
         self.app_installed = True

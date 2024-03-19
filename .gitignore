@@ -165,3 +165,5 @@ __server_files__
 migrations
 static
 templates/landings
+domains_handler
+.editorconfig

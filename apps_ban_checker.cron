@@ -1,1 +1,1 @@
-58 */1 * * * appscontroller python /home/appscontroller/appstrafficcontroller/apps_ban_checker.py
+0 * * * * appscontroller /home/appscontroller/app/.venv/bin/python /home/appscontroller/app/apps_ban_checker.py

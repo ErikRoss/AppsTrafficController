@@ -1,4 +1,3 @@
-from calendar import c
 from datetime import datetime
 from hashlib import sha256
 import logging
@@ -481,6 +480,7 @@ def home():
             hash_id=None,
         )
         g.session.add(campaign_click)
+        g.session.commit()
             
         clid = {"clid": campaign_click.click_id}
         kclid = {"kclid": campaign_click.kclid}
