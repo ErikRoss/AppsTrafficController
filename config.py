@@ -1,19 +1,33 @@
 import os
 
+import pytz
+from decouple import config
+
 # Grabs the folder where the script runs.
 basedir = os.path.abspath(os.path.dirname(__file__))
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 
 # Enable debug mode.
-DEBUG = True
+DEBUG = bool(config('DEBUG', cast=int))
 # SERVER_NAME = "yoursapp.online"
 # SERVER_NAME = "127.0.0.1:5000"
 
-SECRET_KEY = "appmanager2023"
+SECRET_KEY = config('DB_HOST')
 
 # Connect to the database
+DB_HOST = config('DB_HOST')
+DB_NAME = config('DB_NAME')
+DB_USER = config('DB_USER')
+DB_PASSWORD = config('DB_PASSWORD')
+DB_PORT = config('DB_PORT', cast=int)
 SQLALCHEMY_DATABASE_URI = (
-    "postgresql://appscontroller:controller2023@localhost:5432/appscontroller"
+    "postgresql://{}:{}@{}:{}/{}".format(
+        DB_USER,
+        DB_PASSWORD,
+        DB_HOST,
+        DB_PORT,
+        DB_NAME,
+    )
 )
 SQLALCHEMY_TRACK_MODIFICATIONS = False
 SQLALCHEMY_ENGINE_OPTIONS = {'isolation_level': 'READ COMMITTED'} 
@@ -36,11 +50,11 @@ DNS_HOST = "38.54.13.62"
 
 # Production account
 
-NAMECHEAP_CLIENT_IP = "38.54.13.62"
-NAMECHEAP_API_KEY = "8eaea527895a44d69d1c9747ad555949"
-NAMECHEAP_USERNAME = "nexodium"
-NAMECHEAP_SANDBOX = False
-NAMECHEAP_CONFIRM_EMAIL = "verif@symbioticapps.com"
+NAMECHEAP_CLIENT_IP = config('NAMECHEAP_CLIENT_IP')
+NAMECHEAP_API_KEY = config('NAMECHEAP_API_KEY')
+NAMECHEAP_USERNAME = config('NAMECHEAP_USERNAME')
+NAMECHEAP_SANDBOX = bool(config('NAMECHEAP_SANDBOX', cast=int))
+NAMECHEAP_CONFIRM_EMAIL = config('NAMECHEAP_CONFIRM_EMAIL')
 
 NAMECHEAP_API_SANDBOX_URL = "https://api.sandbox.namecheap.com/xml.response"
 NAMECHEAP_API_URL = "https://api.namecheap.com/xml.response"
@@ -55,3 +69,10 @@ CONVERSION_REGISTRATION_PRICE_ANDROID = 0.0
 CONVERSION_REGISTRATION_PRICE_IOS = 0.0
 CONVERSION_DEPOSIT_PRICE_ANDROID = 0.0
 CONVERSION_DEPOSIT_PRICE_IOS = 0.0
+
+
+FLOW_HOST = config('FLOW_HOST')
+EVENTS_HOST = config('EVENTS_HOST')
+IN_APP_HOSTS = [FLOW_HOST, EVENTS_HOST]
+
+TIME_ZONE = pytz.timezone(config('TIME_ZONE', default='UTC'))
