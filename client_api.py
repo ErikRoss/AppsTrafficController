@@ -1852,9 +1852,12 @@ def allow_app_for_users() -> Tuple[Response, int, Dict[str, str]]:
         allow_for_users = request.json.get("users")
 
         if app_id and allow_for_users:
+            logging.info(f"app_id: {app_id}, allow_for_users: {allow_for_users}")
             app_obj = App.query.get(app_id)
             if app_obj:
+                logging.info(f"app_obj: {app_obj}")
                 app_obj.allow_for_users(allow_for_users)
+                logging.info(f"app_obj.allowed_users: {app_obj.allowed_users}")
 
                 return (
                     jsonify({"message": "App allowed for users successfully."}),

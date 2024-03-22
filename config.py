@@ -12,7 +12,9 @@ DEBUG = bool(config('DEBUG', cast=int))
 # SERVER_NAME = "yoursapp.online"
 # SERVER_NAME = "127.0.0.1:5000"
 
-SECRET_KEY = config('DB_HOST')
+SECRET_KEY = config('SECRET_KEY')
+SERVICE_NAME = config('SERVICE_NAME')
+SERVICE_TAG = config('SERVICE_TAG')
 
 # Connect to the database
 DB_HOST = config('DB_HOST')
@@ -37,7 +39,7 @@ UPLOAD_FOLDER = "static/img/uploads"
 LANDINGS_FOLDER = "templates/landings"
 
 # Set DNS host IP for domain registration
-DNS_HOST = "38.54.13.62"
+DNS_HOST = config('DNS_HOST')
 
 # Set pameters for Namecheap API
 

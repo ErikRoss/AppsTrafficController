@@ -1,6 +1,5 @@
 import logging
-from math import log
-from typing import Optional
+from typing import Optional, Union
 
 
 from keitaro import KeitaroApi
@@ -9,14 +8,70 @@ from models import App, AppTag, Campaign
 
 
 class AppsBalancer:
-    def __init__(self, campaign: Optional[Campaign] = None, request: object = None):
+    def __init__(
+        self, 
+        campaign: Optional[Campaign] = None, 
+        request: object = None, 
+        psa: Union[str, int, None] = None, 
+        psa_type: Optional[str] = None
+        ):
         self.campaign = campaign
         self.request = request
+        self.psa = psa
+        self.psa_type = psa_type
+    
+    def select_app_by_psa(self):
+        """
+        Select app by PSA
+        """
+        if not self.campaign:
+            return None
+        
+        if self.psa and self.psa_type:
+            logging.info(f"PSA tag detected: {self.psa_type.capitalize()} [{self.psa}]")
+            if self.psa_type == "app" and isinstance(self.psa, int):
+                app = App.query.get(self.psa)
+                if app:
+                    save_log_message(
+                        self.__class__.__name__,
+                        f"Selected app by PSA: {app.id}",
+                        "info"
+                    )
+                    logging.info(f"Selected app by PSA: {app.id}")
+                    return app
+                else:
+                    save_log_message(
+                        self.__class__.__name__,
+                        f"App {self.psa} not found by PSA",
+                        "info"
+                    )
+                    logging.info(f"App {self.psa} not found by PSA")
+            elif self.psa_type == "tag" and isinstance(self.psa, str):
+                app = self.select_app_by_tag(self.psa)
+                if app:
+                    save_log_message(
+                        self.__class__.__name__,
+                        f"Selected app by PSA tag: {app.id}",
+                        "info"
+                    )
+                    logging.info(f"Selected app by PSA tag: {app.id}")
+                    return app
+                else:
+                    save_log_message(
+                        self.__class__.__name__,
+                        f"No app found by PSA tag {self.psa}",
+                        "info"
+                    )
+                    logging.info(f"No app found by PSA tag {self.psa}")
+        
+        return None
 
     def select_app_by_weight(self):
         """
         Select app by weight
         """
+        if not self.campaign:
+            return None
         app_ids = [app["id"] for app in self.campaign.apps_stats if app["weight"] > 0]
         apps_query = (
             App.query.filter(App.id.in_(app_ids)).filter_by(status="active").all()
@@ -121,10 +176,53 @@ class AppsBalancer:
             )
             return None
     
+    def select_app_by_tag(self, tag: str) -> Optional[App]:
+        """
+        Select app by tag
+        """
+        if not self.campaign:
+            return None
+        
+        tag_obj = AppTag.query.filter_by(tag=tag).first()
+        if not tag_obj:
+            save_log_message(
+                self.__class__.__name__,
+                f"Tag {tag} not found",
+                "info"
+            )
+            logging.info(f"Tag {tag} not found")
+            return None
+        
+        apps = sorted(
+            tag_obj.apps, key=lambda app: app.views
+        )
+        for app in apps:
+            logging.info(f"Check app {app.title}")
+            if app.status == "active":
+                logging.info(f"User ID: {self.campaign.user_id}, Allowed users: {[user.id for user in app.allowed_users]}")
+                if self.campaign.user_id in [user.id for user in app.allowed_users]:
+                    if KeitaroApi().check_unique_app_user(
+                        app.keitaro_id,
+                        self.request
+                        ).get("result") is True:
+                        logging.info(f"App {app.title} is unique for user")
+                        return app
+                    else:
+                        logging.info(f"App {app.title} is not unique for user")
+                        continue
+                else:
+                    logging.error(f"App {app.title} is not allowed for campaign creator user")
+                    continue
+        else:
+            return None
+    
     def select_app_by_tags(self):
         """
         Select app by tags
         """
+        if not self.campaign:
+            return None
+        
         save_log_message(
             self.__class__.__name__,
             f"Select app by tags: {self.campaign.app_tags}",
@@ -132,66 +230,18 @@ class AppsBalancer:
         )
         logging.info(f"Select app by tags: {self.campaign.app_tags}")
         for tag in self.campaign.app_tags:
-            tag_obj = AppTag.query.filter_by(tag=tag).first()
-            if not tag_obj:
+            selected_app = self.select_app_by_tag(tag)
+            if selected_app:
                 save_log_message(
                     self.__class__.__name__,
-                    f"Tag {tag} not found",
+                    f"Selected app by tag: {selected_app.id}",
                     "info"
                 )
-                logging.info(f"Tag {tag} not found")
+                logging.info(f"Selected app by tag: {selected_app.id}")
+                return selected_app
+            else:
+                logging.info(f"No apps found by tag {tag}")
                 continue
-            
-            apps = sorted(
-                tag_obj.apps, key=lambda app: app.views
-            )
-            save_log_message(
-                self.__class__.__name__,
-                f"Apps with tag {tag}: {apps}",
-                "info"
-            )
-            logging.info(f"Apps with tag {tag}: {apps}")
-            
-            for app in apps:
-                save_log_message(
-                    self.__class__.__name__,
-                    f"Check app {app.title}",
-                    "info"
-                )
-                logging.info(f"Check app {app.title}")
-                if app.status == "active":
-                    if (
-                        self.campaign.user_id in [user.id for user in app.allowed_users]
-                        and app.operating_system.lower() 
-                        == self.campaign.operating_system.lower()
-                    ):
-                        if KeitaroApi().check_unique_app_user(
-                            app.keitaro_id,
-                            self.request
-                            ).get("result") is True:
-                            save_log_message(
-                                self.__class__.__name__,
-                                f"App {app.title} is unique for user",
-                                "info"
-                            )
-                            logging.info(f"App {app.title} is unique for user")
-                            return app
-                        else:
-                            save_log_message(
-                                self.__class__.__name__,
-                                f"App {app.title} is not unique for user",
-                                "info"
-                            )
-                            logging.info(f"App {app.title} is not unique for user")
-                            continue
-                    else:
-                        save_log_message(
-                            self.__class__.__name__,
-                            f"App {app.title} is not allowed for user or OS",
-                            "info"
-                        )
-                        logging.error(f"App {app.title} is not allowed for user or OS")
-                        continue
         
         save_log_message(
             self.__class__.__name__,
@@ -278,6 +328,17 @@ class AppsBalancer:
                 "info"
             )
             return None
+        
+        if self.psa and self.psa_type:
+            selected_app = self.select_app_by_psa()
+            if selected_app:
+                save_log_message(
+                    self.__class__.__name__,
+                    f"Selected app by PSA: {selected_app.id}",
+                    "info"
+                )
+                logging.info(f"Selected app by PSA: {selected_app.id}")
+                return selected_app
         
         save_log_message(
             self.__class__.__name__,

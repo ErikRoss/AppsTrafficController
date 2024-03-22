@@ -4,13 +4,12 @@ from abc import ABC
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import TYPE_CHECKING, Type
-from urllib.parse import urlencode
 
 import requests
 from flask import redirect, g
 
 from apps_balancer import AppsBalancer
-from config import TIME_ZONE
+from config import SERVICE_NAME, SERVICE_TAG, TIME_ZONE
 from keitaro import KeitaroApi
 from manage.render_page import emergency, render_page
 from models import CampaignClick, Campaign, App, Landing
@@ -42,8 +41,12 @@ class ClickWeb(ABC):
 
             # optimization: start getting the app here
             selected_app_future = priority_executor.submit(
-                self.global_threads_storage.wrap_in_context,
-                AppsBalancer(campaign, self.request).select_relevant_app
+                self.global_threads_storage.wrap_in_context, AppsBalancer(
+                    campaign, 
+                    self.request, 
+                    web_event.psa, 
+                    web_event.psa_type
+                    ).select_relevant_app
             )
 
             # Campaign click
@@ -197,6 +200,9 @@ class ClickWeb(ABC):
         return campaign_click
 
     def _app_redirect(self: "CampaignClickController", app: App, log_tag: str, web_event: EventWeb, campaign_click: CampaignClick, campaign: Campaign) -> SafeAbortAndResponse | Type[SafeAbort]:
+        self.log(self.LOG_WEB, "Saving User")
+        self.global_threads_storage.run_in_thread(self.save_user, web_event)
+
         # Redirect to app
         if app and app.status == "active":
             campaign_click.result = "redirected to %s app" % log_tag.lower()
@@ -231,20 +237,35 @@ class ClickWeb(ABC):
         return SafeAbort
 
     @staticmethod
-    def save_click(web_event: EventWeb) -> requests.Response:
-        base_url = 'https://hook.eu1.make.com/1ntmj358bnchorj84xfic6vajst4ohk8'
+    def save_click(web_event: EventWeb) -> requests.Response:        
+        base_url = "https://eventservice.bleksi.com/save_click"
 
         args = {
-            'act': 'savedata',
-            'key': web_event.clid,
-            'rma': web_event.rma,
-            'fbclid': web_event.fbclid,
-            'extid': web_event.fbclid_hash,
-            'wcn': web_event.clid,
-            'domain': web_event.domain,
-            'gclid': web_event.fbclid,
-            'xcn': web_event.pay,
-            'ulb': web_event.ulb,
+            "click_id": web_event.clid,
+            "domain": web_event.domain,
+            "rma": web_event.rma,
+            "ulb": web_event.ulb,
+            "xcn": web_event.pay,
+            "fbclid": web_event.fbclid,
+            "gclid": web_event.gclid,
+            "ttclid": web_event.ttclid,
+            "initiator": SERVICE_NAME,
         }
+        
+        return requests.post(base_url, json=args)
 
-        return requests.get(base_url + '?' + urlencode(args))
+    @staticmethod
+    def save_user(web_event: EventWeb) -> requests.Response:
+        base_url = "https://userattribution.bleksi.com/save_user"
+
+        args = {
+            "user_agent": web_event.user_agent,
+            "user_ip": web_event.ip,
+            "panel_clid": web_event.clid,
+            "initiator": SERVICE_NAME,
+            "service_tag": SERVICE_TAG,
+        }
+        
+        attributor_response = requests.post(base_url, json=args)
+
+        return attributor_response

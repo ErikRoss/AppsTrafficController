@@ -34,7 +34,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
 from werkzeug.security import generate_password_hash
 
-from apps_balancer import AppsBalancer
+# from apps_balancer import AppsBalancer
 from config import SQLALCHEMY_DATABASE_URI as DB_URI
 from database import db
 from keitaro import KeitaroApi

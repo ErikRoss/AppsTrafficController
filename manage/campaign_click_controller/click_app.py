@@ -2,9 +2,10 @@ import logging
 from abc import ABC
 from hashlib import sha256
 from typing import TYPE_CHECKING
+from urllib import response
 
 import requests
-from flask import redirect, current_app
+from flask import app, redirect, current_app
 
 from database import db
 from keitaro import KeitaroApi
@@ -107,9 +108,29 @@ class ClickApp(ABC):
         app_event = EventApp(self.request)
 
         if not app_event.clid:
-            raise NoValidError("No click id provided")
+            clid = self._get_app_event_clid(app_event)
+            if clid:
+                app_event.clid = clid
+            else:
+                raise NoValidError("No click id provided")
 
         return app_event
+    
+    def _get_app_event_clid(self: "CampaignClickController", app_event: EventApp) -> str:
+        url = "https://userattribution.bleksi.com/search_user"
+        
+        args = {
+            "user_agent": app_event.user_agent,
+            "user_ip": app_event.ip
+        }
+        
+        attributor_response = requests.post(url, json=args)
+        if attributor_response.status_code == 200:
+            user = attributor_response.json().get("user_data")
+            if user:
+                return user.get("panel_clid")
+            else:
+                raise NotFoundError("Click not found.")
 
     def _get_app_campaign_click(self: "CampaignClickController", app_event: EventApp) -> CampaignClick:
         campaign_click = CampaignClick.query.filter_by(click_id=app_event.clid).first()
@@ -167,49 +188,21 @@ class ClickApp(ABC):
     @staticmethod
     def send_conversion_to_fb(event: str, campaign_click: CampaignClick) -> bool:
         logging.info(f"Send conversion to FB: {event}")
-        conversion_params = {
-            "AddToCart": {
-                "ev": "AddToCart",
-                "xn": "3",
-            },
-            "ViewContent": {
-                "ev": "ViewContent",
-                "xn": "3",
-            },
-            "install": {
-                "ev": "Lead",
-                "xn": "3",
-            },
-            "InitiateCheckout": {
-                "ev": "InitiateCheckout",
-                "xn": "4",
-            },
-            "reg": {
-                "ev": "CompleteRegistration",
-                "xn": "4",
-            },
-            "dep": {
-                "ev": "Purchase",
-                "xn": "5",
-            },
-        }
-
-        key = sha256(campaign_click.fbclid.encode()).hexdigest()
-        params = conversion_params.get(event)
-        if not params:
-            logging.info("Conversion not sent. Event params not found")
-            return False
+        
+        if campaign_click.fbclid:
+            key = sha256(campaign_click.fbclid.encode()).hexdigest()
         else:
-            vmc = params["xn"]
-        url = f"https://hook.eu1.make.com/1ntmj358bnchorj84xfic6vajst4ohk8?act=sendevent&key={key}&vmc=xn{vmc}"
-        if campaign_click.pay:
-            url += f"&xcn={campaign_click.pay}"
-        if campaign_click.appclid:
-            url += f"&appclid={campaign_click.appclid}"
-
-        response = requests.get(url)
-        if response.status_code == 200:
-            logging.info(f"Conversion request url: {url}")
+            key = sha256(campaign_click.click_id.encode()).hexdigest()
+        args = {
+            "key": key,
+            "event": event,
+            "appclid": campaign_click.appclid
+        }
+        
+        resp = requests.post(
+            "https://eventservice.bleksi.com/send_conversion", json=args
+        )
+        if resp.status_code == 200:
             logging.info("Conversion sent")
             return True
         else:

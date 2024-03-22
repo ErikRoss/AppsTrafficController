@@ -321,12 +321,14 @@ class App(db.Model):
         for user in users:
             if user and user not in self.allowed_users:
                 self.allowed_users.append(user)
+        db.session.commit()
 
     def disallow_for_users(self, users: list):
         for user in users:
             user_obj = User.query.get(user)
             if user_obj and user_obj in self.allowed_users:
                 self.allowed_users.remove(user_obj)
+        db.session.commit()
 
     def count_views(self):
         if self.views:
@@ -428,7 +430,7 @@ class Campaign(db.Model):
         landing_title: str = "",
         custom_parameters: dict = {},
         status: str = "inactive",
-        hash_code: str = None
+        hash_code: Optional[str] = None
     ):
         self.title = title
         self.offer_url = offer_url
@@ -452,7 +454,7 @@ class Campaign(db.Model):
     def generate_unique_hash_code(self) -> str:
         print('generate_unique_hash_code')
         for attempt in range(100):
-            hash_code = os.urandom(5).hex()
+            hash_code = os.urandom(8).hex()
             if self.__class__.query.filter_by(hash_code=hash_code).count() == 0:
                 return hash_code
         else:
