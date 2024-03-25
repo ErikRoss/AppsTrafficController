@@ -1,7 +1,7 @@
 import logging
 from abc import ABC
 from hashlib import sha256
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from urllib import response
 
 import requests
@@ -115,13 +115,21 @@ class ClickApp(ABC):
                 raise NoValidError("No click id provided")
 
         return app_event
+
+    def _get_user_city(self: "CampaignClickController", app_event: EventApp) -> Optional[str]:
+        city = KeitaroApi().get_user_city(app_event.ip, app_event.user_agent)
+        return city
+        
     
     def _get_app_event_clid(self: "CampaignClickController", app_event: EventApp) -> str:
+        city = self._get_user_city(app_event)
+        
         url = "https://userattribution.bleksi.com/search_user"
         
         args = {
             "user_agent": app_event.user_agent,
-            "user_ip": app_event.ip
+            "user_ip": app_event.ip,
+            "city": city,
         }
         
         attributor_response = requests.post(url, json=args)

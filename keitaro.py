@@ -1,8 +1,6 @@
 import json
 import logging
-import re
 from typing import Optional
-from flask import app
 import requests
 
 
@@ -12,6 +10,7 @@ class KeitaroApi:
         self.api_url = "https://track.premastex.online/admin_api/v1"
         self.campaign_id = 16
         self.campaign_token = "pfsy8gkrpjcdqdb6yyq3hcbkgj3r9vz8"
+        self.city_campaign_token = "c29rqn83pwktbnf1zx9khsn7d7cytdcd"
         self.headers = {"Content-Type": "application/json", "Api-Key": self.api_token}
 
     def get_campaigns(self):
@@ -114,10 +113,12 @@ class KeitaroApi:
                     user_info = row.split("User info: ")[1]
                     user_info = json.loads(user_info)
                     geo = user_info["Country"]
+                    city = user_info["City"]
                     device = user_info["OS"]
                     kclid = user_info["SubID"]
                     break
             params["geo"] = geo.lower() if geo else "Unknown"
+            params["city"] = city.lower() if city else "Unknown"
             params["device"] = device.lower() if device else "Unknown"
             params["kclid"] = kclid if kclid else "Unknown"
 
@@ -188,15 +189,37 @@ class KeitaroApi:
 
     def set_user_ununique(self, stream_id, request=None, param=None):
         self.check_unique_app_user(stream_id, request, param)
+    
+    def get_user_city(self, ip: str, user_agent: Optional[str] = None) -> str:
+        """
+        Get user city
+        """
+        if not ip:
+            return "Unknown"
+        
+        url = "https://track.premastex.online/click_api/v3"
+        
+        params = {
+            "token": self.city_campaign_token,
+            "log": "1",
+            "info": "1",
+            "ip": ip,
+            "user_agent": user_agent
+        }
+        
+        result = requests.get(url, params=params)
+        if result.status_code == 200:
+            log = result.json()["log"]
+            for row in log:
+                if row.startswith("User info: "):
+                    user_info = row.split("User info: ")[1]
+                    user_info = json.loads(user_info)
+                    city = user_info["City"]
+                    return city.lower() if city else "Unknown"
+            return "Unknown"
+        else:
+            return "Unknown"
 
 
 if __name__ == "__main__":
     api = KeitaroApi()
-    # print(api.check_unique_user(16))
-    # print(api.add_stream_to_campaign("test_app2"))
-    # print(api.check_is_user_bot())
-    # print(api.check_unique_app_user(128))
-    # print(api.set_user_ununique(128))
-    api.set_stream_deleted(167)
-
-    # api.get_campaigns()

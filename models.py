@@ -872,6 +872,7 @@ class CampaignClick(db.Model):
     conversion_timestamp = db.Column(db.DateTime, nullable=True)
     conversion_sent = db.Column(db.Boolean, default=False)
     geo = db.Column(db.String(5), nullable=True)
+    city = db.Column(db.String(50), nullable=True)
     device = db.Column(db.String(20), nullable=True)
     deposit_amount = db.Column(db.Float, nullable=True)
     hash_id = db.Column(db.String(6), nullable=True)
@@ -896,6 +897,7 @@ class CampaignClick(db.Model):
         timestamp: datetime,
         blocked: bool,
         geo: Optional[str] = None,
+        city: Optional[str] = None,
         device: Optional[str] = None,
         hash_id: Optional[str] = None,
         app_id: Optional[int] = None,
@@ -918,6 +920,7 @@ class CampaignClick(db.Model):
         self.timestamp = timestamp
         self.blocked = blocked
         self.geo = geo
+        self.city = city
         self.device = device
         self.hash_id = hash_id
         self.app_id = app_id
@@ -929,6 +932,7 @@ class CampaignClick(db.Model):
         return {
             "id": self.id,
             "geo": self.geo,
+            "city": self.city,
             "device": self.device,
             "click_id": self.click_id,
             "domain": self.domain,

@@ -27,7 +27,7 @@ class ClickWeb(ABC):
         priority_executor = ThreadPoolExecutor(max_workers=1)
 
         try:
-
+            self.log(self.LOG_WEB, f"Request headers: {self.request.headers}")
             # Web event
             web_event = self._get_web_event()
             self.log(self.LOG_WEB, f"Requested campaign id: {web_event.uchsik}. Request args: {self.request.args}")
@@ -165,6 +165,7 @@ class ClickWeb(ABC):
             timestamp=datetime.now(TIME_ZONE),
             blocked=user_data["result"] == "block",
             geo=user_data["geo"].lower() if user_data["geo"] else None,
+            city=user_data["city"].lower() if user_data["city"] else None,
             device=user_data["device"].lower() if user_data["device"] else None,
             hash_id=None,
         )
@@ -201,7 +202,7 @@ class ClickWeb(ABC):
 
     def _app_redirect(self: "CampaignClickController", app: App, log_tag: str, web_event: EventWeb, campaign_click: CampaignClick, campaign: Campaign) -> SafeAbortAndResponse | Type[SafeAbort]:
         self.log(self.LOG_WEB, "Saving User")
-        self.global_threads_storage.run_in_thread(self.save_user, web_event)
+        self.global_threads_storage.run_in_thread(self.save_user, web_event, campaign_click)
 
         # Redirect to app
         if app and app.status == "active":
@@ -255,12 +256,13 @@ class ClickWeb(ABC):
         return requests.post(base_url, json=args)
 
     @staticmethod
-    def save_user(web_event: EventWeb) -> requests.Response:
+    def save_user(web_event: EventWeb, campaign_click: CampaignClick) -> requests.Response:
         base_url = "https://userattribution.bleksi.com/save_user"
 
         args = {
             "user_agent": web_event.user_agent,
             "user_ip": web_event.ip,
+            "city": campaign_click.city or "Unknown",
             "panel_clid": web_event.clid,
             "initiator": SERVICE_NAME,
             "service_tag": SERVICE_TAG,
