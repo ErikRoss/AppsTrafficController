@@ -1,15 +1,17 @@
+from calendar import c
 import logging
 from abc import ABC
 from hashlib import sha256
-from typing import TYPE_CHECKING, Optional
-from urllib import response
+from typing import TYPE_CHECKING
 
 import requests
-from flask import app, redirect, current_app
+from flask import redirect, current_app
 
+from client_api import google_conversions
+from config import SERVICE_TAG
 from database import db
 from keitaro import KeitaroApi
-from models import CampaignClick, Campaign, User, App, Transaction
+from models import CampaignClick, Campaign, GoogleConversion, User, App, Transaction
 from .exceptions import NoValidError, NotFoundError, SafeAbort
 from .objects.event_app import EventApp
 
@@ -49,11 +51,14 @@ class ClickApp(ABC):
             if app_event.pay:
                 campaign_click.pay = app_event.pay
 
-            # Send conversion to FB
-            self.log(self.LOG_APP, f"Send conversion to FB: {app_event.event}")
+            # Send conversion to Conversions Service
+            self.log(
+                self.LOG_APP,
+                f"Send conversion to Conversions Service: {app_event.event}",
+            )
             # optimization: send in the background
             self.global_threads_storage.run_in_thread(
-                self.send_conversion_to_fb,
+                self.send_conversion_to_service,
                 app_event.event, campaign_click
             )
             campaign_click.update_conversion(app_event.event, conversion_sent=True)
@@ -102,6 +107,42 @@ class ClickApp(ABC):
             pass
 
         # final: redirect to offer url
+        if app_event.event:
+            self.log(self.LOG_APP, "Send App Event to Stats Service", "info")
+            try:
+                if not app_event.city or not app_event.country:
+                    location = self._get_user_location(app_event)
+                    app_event.city = location["city"]
+                    app_event.country = location["country"]
+                
+                event_data = {
+                    "user_hash": campaign_click.campaign.user.hash_code,
+                    "app_id": campaign_click.app_id,
+                    "app_name": campaign_click.app.title,
+                    "app_tags": [tag.tag for tag in campaign_click.app.tags],
+                    "app_hash": campaign_click.app.hash_code,
+                    "service_tag": SERVICE_TAG,
+                    "clid": campaign_click.click_id,
+                    "appclid": campaign_click.appclid,
+                    "request_parameters": {
+                        "clid": campaign_click.click_id, 
+                        "kclid": campaign_click.kclid
+                        },
+                    "user_ip": app_event.ip,
+                    "country": app_event.country,
+                    "city": app_event.city,
+                    "device": campaign_click.device,
+                    "event_result": app_event.event,
+                    "deposit_amount": app_event.amount,
+                }
+                self.global_threads_storage.run_in_thread(
+                    self.save_app_event,
+                    event_data
+                )
+                self.log(self.LOG_APP, "App Event sent to Stats Service", "info")
+            except Exception as e:
+                self.log(self.LOG_APP, f"Error: {e}", "error")
+                pass
         return redirect(self.make_offer_url(app_event, campaign, campaign_click))
 
     def _get_app_event(self: "CampaignClickController") -> EventApp:
@@ -116,20 +157,23 @@ class ClickApp(ABC):
 
         return app_event
 
-    def _get_user_city(self: "CampaignClickController", app_event: EventApp) -> Optional[str]:
-        city = KeitaroApi().get_user_city(app_event.ip, app_event.user_agent)
-        return city
-        
-    
+    def _get_user_location(self: "CampaignClickController", app_event: EventApp) -> dict:
+        location = KeitaroApi().get_user_city(app_event.ip, app_event.user_agent)
+        return location
+
     def _get_app_event_clid(self: "CampaignClickController", app_event: EventApp) -> str:
-        city = self._get_user_city(app_event)
+        if not app_event.city or not app_event.country:
+            location = self._get_user_location(app_event)
+            app_event.city = location["city"]
+            app_event.country = location["country"]
         
         url = "https://userattribution.bleksi.com/search_user"
         
         args = {
             "user_agent": app_event.user_agent,
             "user_ip": app_event.ip,
-            "city": city,
+            "city": location["city"] or "Unknown",
+            "appclid": app_event.appclid,
         }
         
         attributor_response = requests.post(url, json=args)
@@ -164,16 +208,19 @@ class ClickApp(ABC):
 
         # already installed
         if app_event.event.lower() == "install" and campaign_click.app_installed:
+            app_event.event = "entry"
             self.log(self.LOG_APP, "App already installed")
             raise SafeAbort
 
         # already registered
         elif app_event.event.lower() == "reg" and campaign_click.app_registered:
+            app_event.event = "rereg"
             self.log(self.LOG_APP, "User already registered")
             raise SafeAbort
 
         # already deposited
         elif app_event.event.lower() == "dep" and campaign_click.app_deposited:
+            app_event.event = "redep"
             self.log(self.LOG_APP, "User already deposited")
             raise SafeAbort
 
@@ -192,30 +239,6 @@ class ClickApp(ABC):
             # handler error: unmatched user and campaign owner
             if user_by_key.id != campaign.user_id:
                 raise NotFoundError("Key not valid.")
-
-    @staticmethod
-    def send_conversion_to_fb(event: str, campaign_click: CampaignClick) -> bool:
-        logging.info(f"Send conversion to FB: {event}")
-        
-        if campaign_click.fbclid:
-            key = sha256(campaign_click.fbclid.encode()).hexdigest()
-        else:
-            key = sha256(campaign_click.click_id.encode()).hexdigest()
-        args = {
-            "key": key,
-            "event": event,
-            "appclid": campaign_click.appclid
-        }
-        
-        resp = requests.post(
-            "https://eventservice.bleksi.com/send_conversion", json=args
-        )
-        if resp.status_code == 200:
-            logging.info("Conversion sent")
-            return True
-        else:
-            logging.info("Conversion not sent")
-            return False
 
     def _handle_event_and_get_charge_amount(self: "CampaignClickController", campaign_click: CampaignClick, campaign: Campaign, app_event: EventApp, app: App, user: User) -> float:
 
@@ -291,3 +314,62 @@ class ClickApp(ABC):
             raise SafeAbort
 
         return charge_amount
+
+    @staticmethod
+    def send_conversion_to_service(event: str, campaign_click: CampaignClick) -> bool:
+        logging.info(f"Send conversion to Service: {event}")
+        if campaign_click.click_source == "google":
+            google_conversion = db.session.query(GoogleConversion).filter_by(rma=campaign_click.rma).first()
+            if not google_conversion:
+                logging.info("Google Conversion not found")
+                return False
+            
+        args = {
+            "click_id": campaign_click.click_id, 
+            "event": event, 
+            "appclid": campaign_click.appclid,
+            "timeout": 1,
+            }
+        if campaign_click.click_source == "google":
+            google_conversion = (
+                db.session.query(GoogleConversion)
+                .filter_by(rma=campaign_click.rma)
+                .first()
+            )
+            if not google_conversion:
+                logging.info("Google Conversion not found")
+                return False
+            else:
+                args["gtag"] = google_conversion.gtag
+                if event == "install":
+                    args["clabel"] = google_conversion.install_clabel
+                elif event == "reg":
+                    args["clabel"] = google_conversion.reg_clabel
+                elif event == "dep":
+                    args["clabel"] = google_conversion.dep_clabel
+
+        resp = requests.post(
+            "https://eventservice.bleksi.com/send_conversion", json=args
+        )
+        if resp.status_code == 200:
+            logging.info("Conversion sent")
+            return True
+        else:
+            logging.info("Conversion not sent")
+            return False
+    
+    @staticmethod
+    def save_app_event(event_data: dict) -> bool:
+        base_url = "https://stats.bleksi.com/app_event"
+        try:
+            resp = requests.post(base_url, json=event_data)
+            logging.info(f"App Event sent to Stats Service: {resp.json()}")
+            if resp.status_code == 200:
+                logging.info("App Event sent")
+                return True
+            else:
+                logging.info("App Event not sent")
+                return False
+        except Exception as e:
+            logging.error(f"Error: {e}")
+            return False

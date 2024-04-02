@@ -1,11 +1,8 @@
-from calendar import c
-from datetime import datetime
 from hashlib import sha256
 import logging
+from math import log
 import os
 from logging import Formatter, FileHandler
-from random import randint
-import traceback
 import pytz
 
 import requests
@@ -21,6 +18,7 @@ from flask import (
     make_response,
     redirect,
     render_template,
+    render_template_string,
     request,
     send_from_directory,
 )
@@ -36,6 +34,7 @@ from werkzeug.security import generate_password_hash
 
 # from apps_balancer import AppsBalancer
 from config import SQLALCHEMY_DATABASE_URI as DB_URI
+from client_api import api_endpoint, create_test_admin, create_registrant
 from database import db
 from keitaro import KeitaroApi
 from logger import save_log_message
@@ -59,7 +58,6 @@ global_threads_storage = GlobalThreadsStorage(app)
 
 db.init_app(app)
 migrate = Migrate(app, db)
-from client_api import api_endpoint, create_test_admin, create_registrant
 
 engine = create_engine(DB_URI)
 Session = scoped_session(sessionmaker(bind=engine))
@@ -345,6 +343,57 @@ def handle_inapp():
             400,
             {"Content-Type": "application/json"},
         )
+
+
+@app.route("/conversion", methods=["GET", "POST"])
+def conversion():
+    logging.info("Conversion request")
+    convValue = request.args.get("xcn")
+    convLabel = request.args.get("clabel")
+    gtagId = request.args.get("gtag")
+    transId = request.args.get("clid")
+    logging.info(f"Conversion params: {convValue}, {convLabel}, {gtagId}, {transId}")
+    logging.info("Rendering page...")
+
+    return render_template_string(
+        """
+        <!DOCTYPE html>
+        <html>
+        <!-- Google tag (gtag.js) -->
+        <script async src="https://www.googletagmanager.com/gtag/js?id={{ gtagId }}"></script>
+
+        <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', '{{ gtagId }}');
+        </script>
+
+        <!-- Event snippet for PURCH_MANUAL conversion page -->
+        <script>
+        gtag('event', 'conversion', {
+            'send_to': '{{ gtagId }}/{{ convLabel }}',
+            'value': {{ convValue }},
+            'currency': 'USD',
+            'transaction_id': '{{ transId }}'
+        });
+        </script>
+
+        <head>
+            <title>Thank you</title>
+        </head>
+        <body>
+            <h1>Thank you!</h1>
+            <p>This is an important page.</p>
+        </body>
+
+        </html>
+        """,
+        convValue=convValue,
+        convLabel=convLabel,
+        gtagId=gtagId,
+        transId=transId,
+    )
 
 
 @app.route("/<path:filename>", methods=["GET"])

@@ -3,7 +3,7 @@ import traceback
 from abc import ABC
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING, Optional, Type
 
 import requests
 from flask import redirect, g
@@ -58,7 +58,9 @@ class ClickWeb(ABC):
             # is new click: save
             if not click_double:
                 # optimization: execute in the global background
+                self.log(self.LOG_WEB, "Save click")
                 self.global_threads_storage.run_in_thread(self.save_click, web_event)
+                self.log(self.LOG_WEB, "Click saved")
 
             # If the OS does not match
             #  try to redirect to a reserve app for the actual OS
@@ -105,7 +107,7 @@ class ClickWeb(ABC):
 
         finally:
             priority_executor.shutdown(wait=False)
-
+            
         return emergency()
 
     def _get_web_event(self: "CampaignClickController") -> EventWeb:
@@ -150,15 +152,20 @@ class ClickWeb(ABC):
             click_id=web_event.clid,
             domain=web_event.domain,
             fbclid=web_event.fbclid,
+            gclid=web_event.gclid,
+            ttclid=web_event.ttclid,
+            click_source=web_event.click_source,
+            key=web_event.key,
             rma=web_event.rma,
             ulb=web_event.ulb,
             kclid=user_data["kclid"],
             pay=web_event.pay,
+            clabel=web_event.clabel,
+            gtag=web_event.gtag,
             request_parameters=request_parameters,
             campaign_hash=web_event.uchsik,
             campaign_id=campaign.id,
             campaign=campaign,
-            offer_url=campaign.offer_url,
             ip=user_data["ip"],
             user_agent=user_data["user_agent"],
             referer=self.request.headers.get("Referer") or "Unknown",
@@ -167,13 +174,17 @@ class ClickWeb(ABC):
             geo=user_data["geo"].lower() if user_data["geo"] else None,
             city=user_data["city"].lower() if user_data["city"] else None,
             device=user_data["device"].lower() if user_data["device"] else None,
+            timezone=web_event.user_timezone,
+            utc_offset=web_event.utc_offset,
+            latitude=web_event.latitude,
+            longitude=web_event.longitude,
             hash_id=None,
         )
         g.session.add(campaign_click)
         logging.info(f"Blocked by Keitaro: {campaign_click.blocked}")
 
         if campaign.status != "active":
-            campaign_click.result = "inactive campaign"
+            campaign_click.result = "emergency"
             self.log(self.LOG_WEB, "Inactive campaign. Redirect to emergency landing")
             raise SafeAbort
 
@@ -183,19 +194,28 @@ class ClickWeb(ABC):
 
             # no campaign landing
             if not campaign.landing_id or not (landing := g.session.query(Landing).get(campaign.landing_id)):
-                campaign_click.result = "landing not found"
+                campaign_click.result = "emergency"
+                self.global_threads_storage.run_in_thread(
+                    self.save_campaign_event, web_event, campaign, campaign_click
+                )
                 self.log(self.LOG_WEB, "Landing not found. Redirect to emergency landing")
                 raise SafeAbort
 
             # landing is not active
             if landing.status != "active":
-                campaign_click.result = "inactive landing"
+                campaign_click.result = "emergency"
+                self.global_threads_storage.run_in_thread(
+                    self.save_campaign_event, web_event, campaign, campaign_click
+                )
                 self.log(self.LOG_WEB, "Inactive landing. Redirect to emergency landing")
                 raise SafeAbort
 
             # render landing
-            campaign_click.result = "show landing"
+            campaign_click.result = "landing"
             self.log(self.LOG_WEB, "Landing found. Rendering landing")
+            self.global_threads_storage.run_in_thread(
+                self.save_campaign_event, web_event, campaign, campaign_click
+            )
             raise SafeAbortAndResponse(render_page(landing))
 
         return campaign_click
@@ -206,12 +226,41 @@ class ClickWeb(ABC):
 
         # Redirect to app
         if app and app.status == "active":
-            campaign_click.result = "redirected to %s app" % log_tag.lower()
-            campaign_click.app_id = campaign_click.app_id or app.id
-
-            redirect_url = app.url.replace("PANELCLID", campaign_click.click_id)
             app.count_views()
-
+            redirect_url = app.url.replace("PANELCLID", campaign_click.click_id)
+            campaign_click.result = "app"
+            campaign_click.app_id = campaign_click.app_id or app.id
+            campaign_click.offer_url = redirect_url
+            try:
+                event_data = {
+                    "service_tag": SERVICE_TAG,
+                    "user_hash": campaign.user.hash_code,
+                    "subuser_hash": campaign.subuser.hash_code
+                    if campaign.subuser
+                    else None,
+                    "campaign_id": campaign.id,
+                    "campaign_name": campaign.title,
+                    "campaign_hash": campaign.hash_code,
+                    "clid": web_event.clid,
+                    "user_ip": web_event.ip,
+                    "request_parameters": campaign_click.request_parameters,
+                    "domain": web_event.domain,
+                    "city": campaign_click.city or "Unknown",
+                    "country": campaign_click.geo or "Unknown",
+                    "device": campaign_click.device or "Unknown",
+                    "event_result": campaign_click.result,
+                    "app_id": campaign_click.app_id,
+                    "landing_id": None,
+                    "offer_url": campaign_click.offer_url,
+                    "app_name": campaign_click.app.title,
+                    "app_tags": [tag.tag for tag in campaign_click.app.tags],
+                    "app_hash": campaign_click.app.hash_code,
+                }
+            except Exception as e:
+                self.log(self.LOG_WEB, f"Error collecting event: \n{e}", "error")
+            self.global_threads_storage.run_in_thread(
+                self.save_campaign_event, event_data=event_data
+            )
             self.log(
                 self.LOG_WEB,
                 "%s app found: %s - %s" % (log_tag, app.id, app.title),
@@ -224,36 +273,79 @@ class ClickWeb(ABC):
             return SafeAbortAndResponse(redirect(redirect_url))
 
         # no app
-        campaign_click.result = "not found app"
         self.log(self.LOG_WEB, "%s app not found. Generating url for redirect" % log_tag)
 
         # or Redirect to offer
         if campaign.offer_url:
+            campaign_click.result = "offer"
             offer_url = self.make_offer_url(web_event, campaign, campaign_click)
+            campaign_click.offer_url = offer_url
+            # self.save_campaign_event(web_event, campaign, campaign_click)
+            event_data = {
+                "service_tag": SERVICE_TAG,
+                "user_hash": campaign.user.hash_code,
+                "subuser_hash": campaign.subuser.hash_code
+                if campaign.subuser
+                else None,
+                "campaign_id": campaign.id,
+                "campaign_name": campaign.title,
+                "campaign_hash": campaign.hash_code,
+                "clid": web_event.clid,
+                "user_ip": web_event.ip,
+                "request_parameters": campaign_click.request_parameters,
+                "domain": web_event.domain,
+                "city": campaign_click.city or "Unknown",
+                "country": campaign_click.geo or "Unknown",
+                "device": campaign_click.device or "Unknown",
+                "event_result": campaign_click.result,
+                "app_id": campaign_click.app_id,
+                "landing_id": None,
+                "offer_url": campaign_click.offer_url,
+            }
+            self.global_threads_storage.run_in_thread(
+                self.save_campaign_event, event_data=event_data
+            )
             self.log(self.LOG_WEB, f"Redirect to offer url: {offer_url}")
             return SafeAbortAndResponse(redirect(offer_url))
 
         # or Render emergency page
         self.log(self.LOG_WEB, "Offer url not found. Redirect to emergency landing", "error")
+        campaign_click.result = "emergency"
+        # self.save_campaign_event(web_event, campaign, campaign_click)
+        self.global_threads_storage.run_in_thread(
+            self.save_campaign_event, web_event, campaign, campaign_click
+        )
+
         return SafeAbort
 
     @staticmethod
-    def save_click(web_event: EventWeb) -> requests.Response:        
-        base_url = "https://eventservice.bleksi.com/save_click"
+    def save_click(web_event: EventWeb) -> requests.Response:
+        logging.info("Save click")
+        try:
+            base_url = "https://eventservice.bleksi.com/save_click"
 
-        args = {
-            "click_id": web_event.clid,
-            "domain": web_event.domain,
-            "rma": web_event.rma,
-            "ulb": web_event.ulb,
-            "xcn": web_event.pay,
-            "fbclid": web_event.fbclid,
-            "gclid": web_event.gclid,
-            "ttclid": web_event.ttclid,
-            "initiator": SERVICE_NAME,
-        }
-        
-        return requests.post(base_url, json=args)
+            args = {
+                "click_id": web_event.clid,
+                "service_tag": SERVICE_TAG,
+                "initiator": SERVICE_NAME,
+                "user_agent": web_event.user_agent,
+                "domain": web_event.domain,
+                "rma": web_event.rma,
+                "ulb": web_event.ulb,
+                "xcn": web_event.pay,
+                "fbclid": web_event.fbclid,
+                "gclid": web_event.gclid,
+                "ttclid": web_event.ttclid,
+                "click_source": web_event.click_source,
+                "key": web_event.key,
+                "clabel": web_event.clabel,
+                "gtag": web_event.gtag,
+            }
+            
+            return requests.post(base_url, json=args)
+        except Exception as e:
+            logging.error(f"Error saving click: \n{e}")
+            return {"result": False}
 
     @staticmethod
     def save_user(web_event: EventWeb, campaign_click: CampaignClick) -> requests.Response:
@@ -267,7 +359,51 @@ class ClickWeb(ABC):
             "initiator": SERVICE_NAME,
             "service_tag": SERVICE_TAG,
         }
-        
-        attributor_response = requests.post(base_url, json=args)
 
-        return attributor_response
+        return requests.post(base_url, json=args)
+
+    @staticmethod
+    def save_campaign_event(
+        web_event: Optional[EventWeb] = None,
+        campaign: Optional[Campaign] = None,
+        campaign_click: Optional[CampaignClick] = None,
+        event_data: Optional[dict] = None
+    ) -> requests.Response:
+        base_url = "https://stats.bleksi.com/campaign_event"
+        
+        if event_data:
+            args = event_data
+        elif web_event and campaign and campaign_click:
+            try:
+                args = {
+                    "service_tag": SERVICE_TAG,
+                    "user_hash": campaign.user.hash_code,
+                    "subuser_hash": campaign.subuser.hash_code if campaign.subuser else None,
+                    "campaign_id": campaign.id,
+                    "campaign_name": campaign.title,
+                    "campaign_hash": campaign.hash_code,
+                    "clid": web_event.clid,
+                    "user_ip": web_event.ip,
+                    "request_parameters": campaign_click.request_parameters,
+                    "domain": web_event.domain,
+                    "city": campaign_click.city or "Unknown",
+                    "country": campaign_click.geo or "Unknown",
+                    "device": campaign_click.device or "Unknown",
+                    "event_result": campaign_click.result,
+                    "app_id": campaign_click.app_id if campaign_click.result == "app" else None,
+                    "landing_id": campaign.landing_id if campaign_click.result == "landing" else None,
+                    "offer_url": campaign_click.offer_url if campaign_click.result in ["offer", "app"] else None,
+                }
+                if campaign_click.result == "app":
+                    app_args = {
+                        "app_name": campaign_click.app.title,
+                        "app_tags": [tag.tag for tag in campaign_click.app.tags],
+                        "app_hash": campaign_click.app.hash_code,
+                    }
+                    args.update(app_args)
+            except Exception as e:
+                logging.error(f"Error saving event: \n{e}")
+                return {"result": False}
+        resp = requests.post(base_url, json=args)
+
+        return resp

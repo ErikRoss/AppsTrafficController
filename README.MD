@@ -463,6 +463,99 @@ Authorization: Bearer <access_token>
 }
 ```
 
+### Получить статистику пользователя
+
+**URL:** `/users/<int:user_id>/statistics`
+
+**Метод:** `GET`
+
+**Доступ:** `admin`, `user` c `user.id` = `user_id`
+
+**Параметры запроса:**
+
+| Параметр | Тип | Описание | Обязательный | Максимальная длина |
+| -------- | --- | -------- | ------------ | ------------------ |
+|period|Строка|Период статистики (`day`, `week`, `month`, `year`, `all`)|Нет, `default:month`||
+|campaign_hash|Строка|Хэш код кампании для выборки её событий|Нет||
+|app_hash|Строка|Хэш код приложения для выборки его событий|Нет||
+
+**Ответ:**
+
+```json
+{
+  "success": true,
+  "data": null
+}
+```
+```json
+{
+  "success": true,
+  "data": {
+    "campaign_events": {
+      "total": 9,
+      "offer": {
+        "total": 1,
+        "events": [
+          {
+            "id": 12,
+            "campaign_name": "AT EGYPT TAG",
+            "subuser_hash": null,
+            "clid": "36171967f7",
+            "domain": "septemoni.online",
+            "request_parameters": {
+              "psa": "2"
+            },
+            "user_ip": "188.163.96.228",
+            "country": "ua",
+            "city": "zaporizhzhya",
+            "device": "ios",
+            "event_result": "offer",
+            "app_id": null,
+            "landing_id": 1,
+            "redirect_url": null
+          }
+        ]
+      },
+      "emergency": {
+        "total": 0,
+        "events": []
+      },
+      "landing": {
+        "total": 0,
+        "events": []
+      },
+      "app": {
+        "total": 0,
+        "events": []
+      },
+    },
+    "app_events": {
+      "total": 0,
+      "view": {
+        "total": 0,
+        "events": []
+      },
+      "install": {
+        "total": 0,
+        "events": []
+      },
+      "register": {
+        "total": 0,
+        "events": []
+      },
+      "deposit": {
+        "total": 0,
+        "events": []
+      },
+      "entry": {
+        "total": 0,
+        "events": []
+      }
+    }
+  }
+}
+```
+
 ### Загрузка файла
 
 **URL:** `/upload_file`
@@ -1196,8 +1289,8 @@ Authorization: Bearer <access_token>
 | `apps` | Список | Список словарей с ID приложений и их весом в % | Да, если не передан список тегов приложений | |
 | `tags` | Список | Список тегов приложений | Да, если не передан список приложений | |
 | `description` | Строка | Описание кампании | Нет | 256 |
-| `offer_url` | Строка | URL оффера | Нет | 256 |
-| `landing_page` | Целое число | ID лендинга | Нет |  |
+| `offer_url` | Строка | URL оффера | Да | 256 |
+| `landing_page` | Целое число | ID лендинга | Да |  |
 | `custom_parameters` | Словарь | Словарь пользовательских параметров | Нет | |
 | `status` | Строка | Статус кампании (`active` или `inactive`) | Да | 20 |
 
@@ -2323,6 +2416,86 @@ id|Целое число|ID прайса|Да||
 ```json
 {
     "message": "Geo price updated successfully."
+}
+```
+
+### Создать Google конверсию
+
+**URL:** `/google_conversions/add`
+
+**Метод:** `POST`
+
+**Доступ:** `admin`, `user`
+
+**Тело запроса:**
+
+```json
+{
+    "name": "My Google Conversion",
+    "gtag": "AW-123456789",
+    "install_clabel": "123456789",
+    "reg_clabel": "123456789",
+    "dep_clabel": "123456789",
+}
+```
+
+| Параметр | Тип | Описание | Обязательный | Максимальная длина |
+| -------- | --- | -------- | ------------ | ------------------ |
+name|Строка|Название конверсии|Да|120|
+|gtag|Строка|Google Tag ID|Да|255|
+|install_clabel|Строка|Google Conversion Label для установки|Да|255|
+|reg_clabel|Строка|Google Conversion Label для регистрации|Да|255|
+|dep_clabel|Строка|Google Conversion Label для депозита|Да|255|
+
+**Ответ в случае успеха:**
+
+```json
+{   
+    "success": true,
+    "message": "Google conversion added successfully.",
+    "data": {
+        "id": 1,
+        "name": "My Google Conversion",
+        "rma": "abc123def456",
+        "gtag": "AW-123456789",
+        "install_clabel": "123456789",
+        "reg_clabel": "123456789",
+        "dep_clabel": "123456789",
+    }
+}
+```
+
+### Получить Google конверсии
+
+**URL:** `/google_conversions`
+
+**Метод:** `GET`
+
+**Доступ:** `admin`, `user` c `user_id` = `google_conversion.user_id`
+
+**Параметры запроса:**
+| Параметр | Тип | Описание | Обязательный | Максимальная длина |
+| -------- | --- | -------- | ------------ | ------------------ |
+|page|Целое число|Номер страницы|Нет (default: 1)||
+|per_page|Целое число|Количество записей на странице|Нет (default: 50)||
+
+**Ответ в случае успеха:**
+
+```json
+{
+    "success": true,
+    "tolal_count": 1,
+    "google_conversions": [
+        {
+            "id": 1,
+            "name": "My Google Conversion",
+            "rma": "abc123def456",
+            "gtag": "AW-123456789",
+            "install_clabel": "123456789",
+            "reg_clabel": "123456789",
+            "dep_clabel": "123456789",
+        }
+    ]
 }
 ```
 

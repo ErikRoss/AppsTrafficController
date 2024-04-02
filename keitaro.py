@@ -190,12 +190,12 @@ class KeitaroApi:
     def set_user_ununique(self, stream_id, request=None, param=None):
         self.check_unique_app_user(stream_id, request, param)
     
-    def get_user_city(self, ip: str, user_agent: Optional[str] = None) -> str:
+    def get_user_city(self, ip: str, user_agent: Optional[str] = None) -> dict:
         """
         Get user city
         """
         if not ip:
-            return "Unknown"
+            return {"country": "Unknown", "city": "Unknown"}
         
         url = "https://track.premastex.online/click_api/v3"
         
@@ -214,11 +214,12 @@ class KeitaroApi:
                 if row.startswith("User info: "):
                     user_info = row.split("User info: ")[1]
                     user_info = json.loads(user_info)
+                    country = user_info["Country"]
                     city = user_info["City"]
-                    return city.lower() if city else "Unknown"
-            return "Unknown"
+                    return {"country": country, "city": city}
+            return {"country": "Unknown", "city": "Unknown"}
         else:
-            return "Unknown"
+            return {"country": "Unknown", "city": "Unknown"}
 
 
 if __name__ == "__main__":

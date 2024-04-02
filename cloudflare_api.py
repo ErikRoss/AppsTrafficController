@@ -4,10 +4,14 @@ import requests
 
 class CloudflareApi:
     def __init__(self):
+        api_key = "0b00ffc31a16286878dce5211701287bf6bef"
+        api_email = "nexodium@proton.me"
         api_token = "xkBpn4tp3HtNxmEXK4QPzpCYjaNx9MVF4OrQXTzA"
         account_id = "e8f5ac44c2848ca0c24e4c8bad429901"
         self.api_host = "https://api.cloudflare.com/client/v4"
         self.headers = {
+            "X-Auth-Email": api_email,
+            "X-Auth-Key": api_key,
             "Authorization": f"Bearer {api_token}",
             "Content-Type": "application/json",
         }
@@ -104,7 +108,29 @@ class CloudflareApi:
             result = response.json()["result"]
             return {"success": True, "result": result}
 
+    def get_managed_headers(self, zone_id: str):
+        url = self.api_host + f"/zones/{zone_id}/managed_headers"
+        response = requests.patch(url, headers=self.headers)
+        if response.status_code != 200:
+            result = response.json()["errors"][0]
+            return {"error": result}
+        else:
+            result = response.json()["result"]
+            return {"success": True, "result": result}
+    
+    def add_visitor_location_header(self, zone_id: str):
+        endpoint = f"/zones/{zone_id}/managed_headers"
+        url = self.api_host + endpoint
+        data = {
+            "managed_request_headers": [
+                {"id": "add_visitor_location_headers", "enabled": True}
+            ]
+        }
 
-if __name__ == "__main__":
-    api = CloudflareApi()
-    api.create_zone("appctrle.online")
+        response = requests.patch(url, headers=self.headers, data=json.dumps(data))
+        if response.status_code != 200:
+            result = response.json()["errors"][0]
+            return {"error": result}
+        else:
+            result = response.json()["result"]
+            return {"success": True, "result": result}

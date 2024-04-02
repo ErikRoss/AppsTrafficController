@@ -1,0 +1,40 @@
+<?php
+
+$convValue = $_GET['xcn'];
+$convLabel = $_GET['clabel'];
+$gtagId = $_GET['gtag'];
+$transId = $_GET['clid'];
+
+?>
+
+<!DOCTYPE html>
+<html>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=<? echo $gtagId; ?>"></script>
+
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', '<? echo $gtagId; ?>');
+</script>
+
+<!-- Event snippet for PURCH_MANUAL conversion page -->
+<script>
+  gtag('event', 'conversion', {
+      'send_to': '<? echo $gtagId; ?>/<? echo $convLabel; ?>',
+      'value': <? echo $convValue; ?>,
+      'currency': 'USD',
+      'transaction_id': '<? echo $transId; ?>'
+  });
+</script>
+
+<head>
+    <title>Thank you</title>
+</head>
+<body>
+    <h1>Thank you!</h1>
+    <p>This is an important page.</p>
+</body>
+
+</html>

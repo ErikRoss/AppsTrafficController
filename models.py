@@ -1,7 +1,5 @@
-import os
 from datetime import datetime
-import hashlib
-import json
+from hashlib import sha256
 import secrets
 from typing import Optional
 
@@ -13,6 +11,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from werkzeug.security import generate_password_hash
 
 from config import SQLALCHEMY_DATABASE_URI as db_uri
+from config import SERVICE_TAG as service_tag
 from database import db
 
 
@@ -30,6 +29,7 @@ class User(db.Model, UserMixin):
     __tablename__ = "Users"
 
     id = db.Column(db.Integer, primary_key=True)
+    hash_code = db.Column(db.String(64), unique=True)
     username = db.Column(db.String(50), unique=True)
     balance = db.Column(db.Float, default=0.00)
     email = db.Column(db.String(256), unique=True)
@@ -58,6 +58,7 @@ class User(db.Model, UserMixin):
         self.role = role
         self.balance = round(0.00, 2)
         self.panel_key = secrets.token_hex(10)
+        self.hash_code = self.generate_hash_code()
 
     def __repr__(self):
         return f"<User {self.username} ({self.email})>"
@@ -124,6 +125,19 @@ class User(db.Model, UserMixin):
         for app_ in apps:
             self.allowed_apps.append(app_)
         db.session.commit()
+    
+    def generate_hash_code(self):
+        """
+        Generate unique hash code for user
+        """
+        return sha256(f"user{self.username}{service_tag}{self.id}".encode()).hexdigest()[:12]
+    
+    def update_hash_code(self):
+        """
+        Update hash code for user
+        """
+        self.hash_code = self.generate_hash_code()
+        db.session.commit()
 
 
 class SubUser(db.Model):
@@ -135,6 +149,7 @@ class SubUser(db.Model):
     description = db.Column(db.String(255))
     owner_id = db.Column(db.Integer, db.ForeignKey("Users.id"))
     owner = relationship("User", backref="subusers")
+    hash_code = db.Column(db.String(64), unique=True)
 
     def __init__(
         self,
@@ -147,6 +162,7 @@ class SubUser(db.Model):
         self.color = color
         self.description = description
         self.owner_id = owner_id
+        self.hash_code = self.generate_hash_code()
 
     def __repr__(self):
         return f"<SubUser {self.name} ({self.owner.username})>"
@@ -158,6 +174,19 @@ class SubUser(db.Model):
             "color": self.color,
             "description": self.description,
         }
+    
+    def generate_hash_code(self):
+        """
+        Generate unique hash code for subuser
+        """
+        return sha256(f"subuser{self.name}{service_tag}{self.id}".encode()).hexdigest()[:12]
+    
+    def update_hash_code(self):
+        """
+        Update hash code for subuser
+        """
+        self.hash_code = self.generate_hash_code()
+        db.session.commit()
 
 
 class Transaction(db.Model):
@@ -215,6 +244,7 @@ class App(db.Model):
     __tablename__ = "Apps"
 
     id = db.Column(db.Integer, primary_key=True)
+    hash_code = db.Column(db.String(64), unique=True)
     created_at = db.Column(db.DateTime)
     keitaro_id = db.Column(db.Integer, nullable=True)
     title = db.Column(db.String(120), unique=True)
@@ -263,6 +293,7 @@ class App(db.Model):
         self.keitaro_id = keitaro_id
         self.install_price = install_price
         self.conversion_price = conversion_price
+        self.hash_code = self.generate_hash_code()
 
     def __repr__(self):
         return f"'{self.title}' (id: {self.id})"
@@ -275,6 +306,7 @@ class App(db.Model):
         
         return {
             "id": self.id,
+            "hash_code": self.hash_code,
             "created_at": created_at,
             # "keitaro_id": self.keitaro_id,
             "title": self.title,
@@ -297,6 +329,7 @@ class App(db.Model):
     def to_limited_dict(self):
         return {
             "id": self.id,
+            "hash_code": self.hash_code,
             "title": self.title,
             "image": self.image,
             "operating_system": self.operating_system,
@@ -360,6 +393,16 @@ class App(db.Model):
             self.status = "deleted"
         else:
             self.status = "inactive"
+    
+    def generate_hash_code(self):
+        """
+        Generate unique hash code for app
+        """
+        return sha256(f"app{self.title}{service_tag}{self.id}".encode()).hexdigest()[:12]
+    
+    def update_hash_code(self):
+        self.hash_code = self.generate_hash_code()
+        db.session.commit()
 
 
 class AppTag(db.Model):
@@ -395,8 +438,9 @@ class Campaign(db.Model):
     description = db.Column(db.Text)
     offer_url = db.Column(db.String(255), nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey("Users.id"), nullable=True)
-    user = db.Column(db.String(255))
+    user = relationship("User", backref="campaigns")
     subuser_id = db.Column(db.Integer, db.ForeignKey("SubUsers.id"), nullable=True)
+    subuser = relationship("SubUser", backref="campaigns")
     geo = db.Column(db.String(5))
     landing_title = db.Column(db.String(255), nullable=True)
     landing_id = db.Column(db.Integer, db.ForeignKey("Landings.id"), nullable=True)
@@ -422,7 +466,7 @@ class Campaign(db.Model):
         apps_stats: list,
         app_tags: list,
         operating_system: str,
-        user: str,
+        user: Optional[User] = None,
         user_id: Optional[int] = None,
         subuser_id: Optional[int] = None,
         description: str = "",
@@ -449,16 +493,10 @@ class Campaign(db.Model):
         self.apps_stats = apps_stats
         self.operating_system = operating_system
         self.app_tags = app_tags
-        self.hash_code = hash_code or self.generate_unique_hash_code()
+        self.hash_code = hash_code or self.generate_hash_code()
 
-    def generate_unique_hash_code(self) -> str:
-        print('generate_unique_hash_code')
-        for attempt in range(100):
-            hash_code = os.urandom(8).hex()
-            if self.__class__.query.filter_by(hash_code=hash_code).count() == 0:
-                return hash_code
-        else:
-            raise ValueError('cannot find unique hash_code')
+    def generate_hash_code(self) -> str:
+        return sha256(f"campaign{self.title}{service_tag}{self.id}".encode()).hexdigest()[:16]
 
     def __repr__(self):
         return f"<Campaign {self.id}>"
@@ -480,7 +518,7 @@ class Campaign(db.Model):
             "description": self.description,
             "offer_url": self.offer_url,
             "user_id": self.user_id,
-            "user_name": self.user,
+            "user_name": self.user.username if self.user else None,
             "subuser": subuser.to_dict() if subuser else None,
             "geo": self.geo,
             "apps": [app.id for app in self.apps],
@@ -511,6 +549,53 @@ class Campaign(db.Model):
     def set_archived(self, archived: bool):
         self.archive = archived
         db.session.commit()
+
+
+class GoogleConversion(db.Model):
+    __tablename__ = "GoogleConversions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255))
+    user_id = db.Column(db.Integer, db.ForeignKey("Users.id"))
+    user = relationship("User", backref="google_conversations")
+    rma = db.Column(db.String(255))
+    gtag = db.Column(db.String(255))
+    install_clabel = db.Column(db.String(255))
+    reg_clabel = db.Column(db.String(255))
+    dep_clabel = db.Column(db.String(255))
+    
+    def __init__(
+        self,
+        name: str,
+        user_id: int,
+        rma: str,
+        gtag: str,
+        install_clabel: str,
+        reg_clabel: str,
+        dep_clabel: str,
+    ):
+        self.name = name
+        self.user_id = user_id
+        self.rma = rma
+        self.gtag = gtag
+        self.install_clabel = install_clabel
+        self.reg_clabel = reg_clabel
+        self.dep_clabel = dep_clabel
+    
+    def __repr__(self):
+        return f"<GoogleConversion {self.id}: {self.rma}>"
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "user_id": self.user_id,
+            "rma": self.rma,
+            "gtag": self.gtag,
+            "install_clabel": self.install_clabel,
+            "reg_clabel": self.reg_clabel,
+            "dep_clabel": self.dep_clabel,
+        }
 
 
 class TopDomain(db.Model):
@@ -847,10 +932,16 @@ class CampaignClick(db.Model):
     click_id = db.Column(db.String(10))
     domain = db.Column(db.String(255))
     fbclid = db.Column(db.String(500))
+    gclid = db.Column(db.String(500))
+    ttclid = db.Column(db.String(500))
+    click_source = db.Column(db.String(20))
+    key = db.Column(db.String(100))
     rma = db.Column(db.String(255))
     ulb = db.Column(db.Integer)
     pay = db.Column(db.Integer, nullable=True, default=None)
     kclid = db.Column(db.String(255), nullable=True, default=None)
+    clabel = db.Column(db.String(255), nullable=True, default=None)
+    gtag = db.Column(db.String(255), nullable=True, default=None)
     request_parameters = db.Column(db.JSON)
     campaign_hash = db.Column(db.String(64))
     campaign_id = db.Column(db.Integer, db.ForeignKey("Campaigns.id"), nullable=True)
@@ -874,6 +965,10 @@ class CampaignClick(db.Model):
     geo = db.Column(db.String(5), nullable=True)
     city = db.Column(db.String(50), nullable=True)
     device = db.Column(db.String(20), nullable=True)
+    timezone = db.Column(db.String(50), nullable=True)
+    utc_offset = db.Column(db.Float, nullable=True)
+    latitude = db.Column(db.Float, nullable=True)
+    longitude = db.Column(db.Float, nullable=True)
     deposit_amount = db.Column(db.Float, nullable=True)
     hash_id = db.Column(db.String(6), nullable=True)
 
@@ -881,34 +976,50 @@ class CampaignClick(db.Model):
         self,
         click_id: str,
         domain: Optional[str],
-        fbclid: str,
         rma: str,
         ulb: int,
         kclid: Optional[str],
         pay: Optional[int],
         request_parameters: dict,
-        campaign_hash: str,
+        campaign_hash: Optional[str],
         campaign_id: int,
         campaign: Campaign,
-        offer_url: str,
         ip: str,
         user_agent: str,
         referer: str,
         timestamp: datetime,
         blocked: bool,
+        fbclid: Optional[str] = None,
+        gclid: Optional[str] = None,
+        ttclid: Optional[str] = None,
+        clabel: Optional[str] = None,
+        gtag: Optional[str] = None,
+        click_source: Optional[str] = None,
+        key: Optional[str] = None,
+        offer_url: Optional[str] = None,
         geo: Optional[str] = None,
         city: Optional[str] = None,
         device: Optional[str] = None,
+        timezone: Optional[str] = None,
+        utc_offset: Optional[float] = None,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
         hash_id: Optional[str] = None,
         app_id: Optional[int] = None,
     ):
         self.click_id = click_id
         self.domain = domain
         self.fbclid = fbclid
+        self.gclid = gclid
+        self.ttclid = ttclid
+        self.click_source = click_source
+        self.key = key
         self.rma = rma
         self.ulb = ulb
         self.kclid = kclid
         self.pay = pay
+        self.clabel = clabel
+        self.gtag = gtag
         self.request_parameters = request_parameters
         self.campaign_hash = campaign_hash
         self.campaign_id = campaign_id
@@ -922,6 +1033,10 @@ class CampaignClick(db.Model):
         self.geo = geo
         self.city = city
         self.device = device
+        self.timezone = timezone
+        self.utc_offset = utc_offset
+        self.latitude = latitude
+        self.longitude = longitude
         self.hash_id = hash_id
         self.app_id = app_id
 
@@ -940,6 +1055,8 @@ class CampaignClick(db.Model):
             "rma": self.rma,
             "ulb": self.ulb,
             "pay": self.pay,
+            "clabel": self.clabel,
+            "gtag": self.gtag,
             "request_parameters": self.request_parameters,
             "campaign_hash": self.campaign_hash,
             "campaign_id": self.campaign_id,

@@ -1,5 +1,6 @@
 import datetime
 from functools import wraps
+from hashlib import sha256
 import logging
 import os
 from urllib.parse import urlencode
@@ -10,6 +11,7 @@ import py7zr
 from flask import Response, Blueprint, current_app, jsonify, request
 from flask_jwt_extended import create_access_token, current_user, jwt_required
 import pytz
+import requests
 from sqlalchemy import and_
 
 # from random_word import RandomWords
@@ -21,13 +23,14 @@ from keitaro import KeitaroApi
 from namecheap_api import NamecheapApi
 import server_commands as sc
 
-from app import db
-from config import NAMECHEAP_CONFIRM_EMAIL as registrant_email
+from database import db
+from config import NAMECHEAP_CONFIRM_EMAIL as registrant_email, SERVICE_TAG
 from models import (
     AppTag,
     CampaignLink,
     Campaign,
     GeoPrice,
+    GoogleConversion,
     Landing,
     LogMessage,
     SubUser,
@@ -1052,6 +1055,56 @@ def user_transactions(user_id: int):
         200,
         {"Content-Type": "application/json"},
     )
+
+
+@api_endpoint.route("/users/<int:user_id>/statistics", methods=["GET"])
+@jwt_required()
+@check_user_status()
+def user_statistics(user_id: int):
+    if current_user.role != "admin" and current_user.id != user_id:
+        return (
+            jsonify({"error": "You are not allowed to view this user statistics."}),
+            403,
+            {"Content-Type": "application/json"},
+        )
+    
+    user_obj = User.query.get(user_id)
+    if not user_obj:
+        return (
+            jsonify({"error": "User not found."}),
+            404,
+            {"Content-Type": "application/json"},
+        )
+    
+    if not user_obj.hash_code:
+        user_obj.update_hash_code()
+        
+    period = request.args.get("period", default="month")
+    campaign_hash = request.args.get("campaign_hash")
+    app_hash = request.args.get("app_hash")
+
+    url = "https://stats.bleksi.com/user_statistics"
+    args = {
+        "service_tag": SERVICE_TAG,
+        "user_hash": user_obj.hash_code,
+        "period": period, 
+        "campaign_hash": campaign_hash,
+        "app_hash": app_hash
+        }
+    
+    resp = requests.post(url, json=args)
+    if resp.status_code == 200:
+        return (
+            jsonify(resp.json()),
+            200,
+            {"Content-Type": "application/json"},
+        )
+    else:
+        return (
+            jsonify({"error": "Error fetching user statistics."}),
+            500,
+            {"Content-Type": "application/json"},
+        )
 
 
 @api_endpoint.route("/users/update_password", methods=["PATCH"])
@@ -2142,6 +2195,19 @@ def add_campaign() -> Tuple[Response, int, Dict[str, str]]:
         campaign_landing_id = request.json.get("landing_page")
         campaign_status = request.json.get("status")
         campaign_subuser_id = request.json.get("subuser_id")
+        
+        if not all([
+            campaign_title,
+            campaign_offer_url,
+            campaign_geo,
+            campaign_landing_id,
+            campaign_status
+        ]):
+            return (
+                jsonify({"error": "Not all parameters are set."}),
+                400,
+                {"Content-Type": "application/json"},
+            )
 
         custom_parameters = request.json.get("custom_parameters")
         if custom_parameters:
@@ -2207,10 +2273,10 @@ def add_campaign() -> Tuple[Response, int, Dict[str, str]]:
         campaign_user_id = request.json.get("user")
         campaign_user = User.query.get(campaign_user_id)
         if campaign_user:
-            campaign_user = campaign_user.username
+            campaign_user = campaign_user
         else:
             campaign_user_id = None
-            campaign_user = "Unknown"
+            campaign_user = None
 
         campaign_parameters = [campaign_title, campaign_user, campaign_geo]
 
@@ -2650,6 +2716,138 @@ def delete_campaign(campaign_id: int) -> Tuple[Response, int, Dict[str, str]]:
         return (
             jsonify({"error": "Campaign not found."}),
             404,
+            {"Content-Type": "application/json"},
+        )
+
+
+@api_endpoint.route("/google_conversions", methods=["GET"])
+@jwt_required()
+def google_conversions() -> Tuple[Response, int, Dict[str, str]]:
+    """
+    Returns all google conversions in API format.
+    """
+    page = request.args.get("page", default=1, type=int)
+    per_page = request.args.get("per_page", default=50, type=int)
+
+    if current_user.role == "admin":
+        conversions_query_all = GoogleConversion.query.all()
+    else:
+        conversions_query_all = GoogleConversion.query.filter_by(
+            user_id=current_user.id
+        ).all()
+        
+    if conversions_query_all and isinstance(conversions_query_all, list):
+        total_count = len(conversions_query_all)
+    elif conversions_query_all and isinstance(conversions_query_all, Query):
+        total_count = conversions_query_all.count()
+    else:
+        total_count = 0
+        
+    if total_count == 0:
+        return (
+            jsonify({
+                "success": True,
+                "google_conversions": [], 
+                "total_count": 0
+                }),
+            200,
+            {"Content-Type": "application/json"},
+        )
+    else:
+        if current_user.role == "admin":
+            conversions_query = GoogleConversion.query.order_by(
+                GoogleConversion.id.desc()
+            ).paginate(page=page, per_page=per_page, error_out=False)
+        else:
+            conversions_query = (
+                GoogleConversion.query.filter_by(user_id=current_user.id)
+                .order_by(GoogleConversion.id.desc())
+                .paginate(page=page, per_page=per_page, error_out=False)
+            )
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "google_conversions": [
+                        conversion.to_dict() for conversion in conversions_query
+                    ],
+                    "total_count": total_count,
+                }
+            ),
+            200,
+            {"Content-Type": "application/json"},
+        )
+    
+
+@api_endpoint.route("/google_conversions/add", methods=["POST"])
+@jwt_required()
+def add_google_conversion() -> Tuple[Response, int, Dict[str, str]]:
+    """
+    Adds new google conversion to database with data from request json.
+
+    Returns:
+        A tuple containing a JSON response with a message or error, a status code,
+        and a dictionary with content type.
+    """
+    if not request.json:
+        return (
+            jsonify({
+                "success": False,
+                "error": "No json data."
+                }),
+            400,
+            {"Content-Type": "application/json"},
+        )
+        
+    name = request.json.get("name")
+    gtag = request.json.get("gtag")
+    install_clabel = request.json.get("install_clabel")
+    reg_clabel = request.json.get("reg_clabel")
+    dep_clabel = request.json.get("dep_clabel")
+    hash_key = (
+        f"{name}{gtag}{install_clabel}{reg_clabel}{dep_clabel}{datetime.datetime.now().timestamp}"
+    )
+    rma = sha256(hash_key.encode()).hexdigest()[:16]
+    
+    if not all([name, gtag, install_clabel, reg_clabel, dep_clabel]):
+        return (
+            jsonify({
+                "success": False,
+                "error": "Not all parameters are set."
+                }),
+            400,
+            {"Content-Type": "application/json"},
+        )
+    
+    try:
+        new_conversion = GoogleConversion(
+            name=name,
+            rma=rma,
+            gtag=gtag,
+            install_clabel=install_clabel,
+            reg_clabel=reg_clabel,
+            dep_clabel=dep_clabel,
+            user_id=current_user.id
+        )
+        db.session.add(new_conversion)
+        db.session.commit()
+        return (
+            jsonify({
+                "success": True,
+                "message": "Google conversion added successfully.",
+                "data": new_conversion.to_dict()
+                }),
+            200,
+            {"Content-Type": "application/json"},
+        )
+    except Exception as e:
+        return (
+            jsonify({
+                "success": False,
+                "error": str(e)
+                }),
+            500,
             {"Content-Type": "application/json"},
         )
 
@@ -4739,6 +4937,47 @@ def log_messages():
 
     return (
         jsonify({"log_messages": log_messages, "total_count": total_count}),
+        200,
+        {"Content-Type": "application/json"},
+    )
+    
+
+@api_endpoint.route("/statistics", methods=["GET"])
+def get_statistics():
+    users = {
+        "total": User.query.count(),
+        "active": User.query.filter_by(status="active").count(),
+        "blocked": User.query.filter_by(status="banned").count(),
+    }
+    
+    apps = {
+        "total": App.query.count(),
+        "active": App.query.filter_by(status="active").count(),
+        "blocked": App.query.filter_by(status="blocked").count(),
+        "views": App.query.with_entities(func.sum(App.views)).first()[0] or 0,
+        "installs": App.query.with_entities(func.sum(App.installs)).first()[0] or 0,
+        "registrations": App.query.with_entities(func.sum(App.registrations)).first()[0] or 0,
+        "deposits": App.query.with_entities(func.sum(App.deposits)).first()[0] or 0,
+    }
+    
+    campaigns = {
+        "total": Campaign.query.count(),
+        "active": Campaign.query.filter_by(status="active").count(),
+        "archived": Campaign.query.filter_by(status="blocked").count(),
+        "clicks": Campaign.query.with_entities(func.sum(Campaign.clicks)).first()[0] or 0, 
+        "blocked_clicks": Campaign.query.with_entities(func.sum(Campaign.blocked_clicks)).first()[0] or 0,
+        "app_redirected_clicks": Campaign.query.with_entities(func.sum(Campaign.app_redirected_clicks)).first()[0] or 0,
+    }
+    
+    statistics = {
+        "users": User.query.count(),
+    }
+    
+    return (
+        jsonify({
+            "success": True,
+            "statistics": statistics
+        }),
         200,
         {"Content-Type": "application/json"},
     )

@@ -68,13 +68,15 @@ class CampaignClickController(ClickApp, ClickWeb):
 
         # extend protocol if not provided
         if not (
-                campaign_click.offer_url.startswith('http://') or
-                campaign_click.offer_url.startswith('https://')
+                campaign.offer_url.startswith('http://') or
+                campaign.offer_url.startswith('https://')
         ):
-            campaign_click.offer_url = 'https://' + campaign_click.offer_url
+            campaign.offer_url = 'https://' + campaign.offer_url
+        else:
+            campaign.offer_url = campaign.offer_url
 
         # merge GET attrs
-        parsed_url = urlparse(campaign_click.offer_url)
+        parsed_url = urlparse(campaign.offer_url)
         query_params = parse_qs(parsed_url.query)
 
         # noinspection PyTypeChecker

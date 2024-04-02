@@ -130,6 +130,11 @@ class DomainsHandler:
         cf_api = CloudflareApi()
         result = cf_api.set_always_use_https(zone_id, state)
         return result
+    
+    def set_user_location_headers_on_cf(self, zone_id: str) -> dict:
+        cf_api = CloudflareApi()
+        result = cf_api.add_visitor_location_header(zone_id)
+        return result
 
     def redirect_domain(self, domain: Domain):
         registrant = self.get_registrant_parameters()
@@ -215,6 +220,7 @@ class DomainsHandler:
         #     new_domain.subdomains.append(subdomain_obj)
         #     db.session.commit()
         #     logging.info(f"Subdomain {subdomain}.{domain} added to database.")
+        self.set_user_location_headers_on_cf(domain.zone_id)
 
         if all(
             [
